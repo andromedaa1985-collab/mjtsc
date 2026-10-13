@@ -1,0 +1,372 @@
+{
+  "schemaVersion": 1,
+  "researchDate": "2026-10-13",
+  "timezone": "Asia/Shanghai",
+  "intendedEntryPoints": [
+    "即梦国内",
+    "小云雀国内"
+  ],
+  "status": "research_only_not_generation_test",
+  "boundaries": [
+    "已核官方文档不等于用户账号权限已验收",
+    "未付费生成或自行复跑作者案例",
+    "8条模板均为新写，未测实际生成效果",
+    "14点公开教程截图，不是完整逐帧/音频审计",
+    "本轮未修改平台运行代码，建议字段不是供应商API参数"
+  ],
+  "profile": {
+    "model": "Seedance 2.5",
+    "standardDurationSeconds": [
+      4,
+      30
+    ],
+    "referenceLimits": {
+      "images": 30,
+      "videos": 10,
+      "videoTotalSeconds": 30,
+      "audio": 10,
+      "audioTotalSeconds": 30
+    },
+    "limitSourceIds": [
+      "guide",
+      "ark"
+    ],
+    "nativeResolution": "小云雀手册及当前国内方舟规范支持1080p；按入口实际菜单选取",
+    "xyqExtendedWorkflowMaxSeconds": 300,
+    "extendedImplementation": "利用延长能力；公开手册未披露内部调度",
+    "xyqUpscaleMax": "4K超分，不是原生4K生成",
+    "userAccountEntitlementsVerified": false
+  },
+  "uiPaths": {
+    "xyqWeb": "沉浸式短片 → Seedance 2.5 → 参考生成/视频编辑/视频延长/首尾帧",
+    "xyqApp": "沉浸式短片 → Seedance 2.5 → 参考生成/视频编辑/视频续写；独立首尾帧按钮未核实",
+    "xyqReshoot": "画布视频节点或分镜故事板 → 片段重拍 → 截取/注释 → 修改指令 → 提交",
+    "jimeng": "网页视频生成 → Seedance 2.5；当前账号详细菜单未登录核验"
+  },
+  "modes": [
+    "reference",
+    "keyframe",
+    "edit",
+    "extend"
+  ],
+  "methods": [
+    {
+      "id": "roles",
+      "name": "参考素材分工",
+      "evidence": "官方指南 + 作者对照",
+      "procedure": "逐项记录主体、参考维度和排除项；多角度同一角色明确同一身份。",
+      "sourceIds": [
+        "guide",
+        "huashu"
+      ],
+      "failure": "角色、音色和运动参考互相覆盖。"
+    },
+    {
+      "id": "previs",
+      "name": "白模预演",
+      "evidence": "官方能力 + 14 点演示观察 + 作者实测",
+      "procedure": "先检查预演的动作和摄影机，再绑定身份与美术；几何体逐项映射。",
+      "sourceIds": [
+        "seed",
+        "previs",
+        "huashu"
+      ],
+      "failure": "站姿滑行、穿墙、相机方向错；渲染不能保证纠正控制源。"
+    },
+    {
+      "id": "coverage",
+      "name": "表演母版换机位",
+      "evidence": "官方机位编辑 + 社区作者自述",
+      "procedure": "先锁视线、说话窗、接触和动作；单独放开新机位，补未知视点。",
+      "sourceIds": [
+        "launch",
+        "coverage"
+      ],
+      "failure": "新视点需要补造不可见区域，复杂接触或口型仍可能错。"
+    },
+    {
+      "id": "anchors",
+      "name": "关键状态与连续性",
+      "evidence": "官方关键帧说明 + 有限项目试镜",
+      "procedure": "独立状态图保持持物、方向与位置；用交接状态连接片段。",
+      "sourceIds": [
+        "guide",
+        "anchors",
+        "mtb"
+      ],
+      "failure": "派生参考噪点、关键帧矛盾、接续动作相位不一致。"
+    },
+    {
+      "id": "acting",
+      "name": "对白驱动表演",
+      "evidence": "社区结构 + 作者实际生成复盘",
+      "procedure": "原对白逐字保留；触发句→可见反应→站位/镜头；分开音色和配乐。",
+      "sourceIds": [
+        "dialogue",
+        "pv",
+        "audit"
+      ],
+      "failure": "台词漏字或串人，BGM误生成，动作顺序与次数偏离。"
+    },
+    {
+      "id": "repair",
+      "name": "局部返工",
+      "evidence": "国内平台手册 + CLI边界复盘",
+      "procedure": "准确截取与注释；所改对象、保留项、目标结果；核验接缝。",
+      "sourceIds": [
+        "xyq",
+        "reshoot"
+      ],
+      "failure": "真实编辑、短段重生成和剪入局部不能混称同一功能。"
+    },
+    {
+      "id": "depth",
+      "name": "白模加深度参考",
+      "evidence": "原平台正文；未做结果对照",
+      "procedure": "只列为实验：白模管调度，深度补远近层级。",
+      "sourceIds": [
+        "depth"
+      ],
+      "failure": "本轮未核到完整prompt、制作方式、量化增益；不是特殊API参数。"
+    }
+  ],
+  "templates": [
+    {
+      "id": "reference",
+      "title": "基础参考生成：同一个人，清楚的镜头任务",
+      "mode": "参考生成",
+      "duration": 12,
+      "assets": "图1正面、图2侧面：同一主角；图3：场景；视频1：简单动作参考。",
+      "check": "只出现一个主角；动作停在门外；手持物未换手；镜头终点明确。",
+      "sources": [
+        "guide"
+      ],
+      "body": "任务：生成新的12秒剧情镜头。\n参考职责：图1、图2是同一位主角的不同视角，只定义身份、服装与身材，不能生成两个人。图3只定义雨夜走廊的布景、光源和材质。视频1只参考行走的自然重心，不借它的人物、背景或摄影机运动。\n镜头目的：从主角犹豫的手，揭示她必须进入的房间。一镜到底。\n0—4秒：从她右手握着的旧钥匙近景开始；手指捏紧一下，钥匙没有换手。摄影机平稳后移到腰部景别。\n4—9秒：她沿走廊向门走两步，在门外停下。摄影机随她后移，门一直在她前方，不穿墙。\n9—12秒：她抬眼看向门内的暖光，手停在门把前，没有开门。停在可接下一镜的中景。\n光色：走廊为低饱和冷灰，门缝是局部暖光；肤色不染成橙色，湿木与金属高光保留细节。\n声音：脚步、雨声和钥匙轻响；无对白、无配乐、无画面字幕。",
+      "useNotes": "在界面另设12秒和画幅。所有编号用真实上传编号替换。"
+    },
+    {
+      "id": "clay",
+      "title": "白模预演：把空间和运动交给可见素材",
+      "mode": "参考生成 + 白模视频",
+      "duration": 12,
+      "assets": "视频1：12秒自制白模预演；图1：主角；图2：美术场景。",
+      "check": "机位路线、遮挡、屏幕方向、接触点；白模自身先通过检查。",
+      "sources": [
+        "huashu",
+        "previs",
+        "seed"
+      ],
+      "body": "任务：将视频1的白模预演渲染成12秒剧情镜头。成片镜头数量与预演一致。\n素材职责：视频1只负责空间布局、人物路线、摄影机路径和切镜时刻；不保留灰色材质、辅助线、名牌与白模人形。图1只定义主角身份及造型。图2定义完成后的建筑、道具材质与光色，不照搬图2里的机位。\n映射：预演中的蓝色人形对应图1主角；长方块是木箱；门洞是廊道出口。全片只有一个主角。\n剧情：主角绕过木箱，沿廊道走到出口，在出口停住并回头看一眼；这套动作与预演完全一致。若预演仍是站姿滑行，先修预演，不让文字同时要求另一条运动路线。\n摄影：跟随预演的起点、经过木箱的遮挡和出口终点，保持相同屏幕方向。不要增加环绕镜头或额外切镜。\n视觉完成：冷灰石墙与潮湿木箱，出口有低强度暖光；皮肤和布料自然，阴影方向与出口光源相符。无对白；脚步、衣料与风声，不加字幕。",
+      "useNotes": "先录好12秒白模并验动作、路线和切点，再提交渲染；关闭辅助名牌。"
+    },
+    {
+      "id": "coverage",
+      "title": "同一表演的新机位：锁住视线和动作窗口",
+      "mode": "视频编辑 / 机位编辑（入口支持时）",
+      "duration": null,
+      "assets": "视频1：已通过的8秒表演母版；图1：侧面身份；图2：新视角布景。",
+      "check": "时间窗、口型、道具位置与原视线逐项对照；不能只比较脸好不好看。",
+      "sources": [
+        "coverage",
+        "launch"
+      ],
+      "body": "编辑视频1，生成同一场表演的另一个机位。视频1是唯一表演母版。\n保持：说话和沉默窗口、动作先后、头部转向、视线目标、右手持杯、杯子接触桌面的时刻及原对白音频。不要重新演这段戏。\n仅改变摄影机：从原正面机位改为主角左侧约30度的中近景，固定机位，眼睛上方保留少量空间。主角仍看原来的对戏者位置，不能改为看新摄影机。\n图1只补主角侧面外观，图2只补新视点显露的墙面与门；不改变人物服装和主光方向。\n画面人数不变，不新增台词、不增删动作，不增加切镜。将其他改动留到下一次单独编辑。",
+      "useNotes": "需当前入口有对应编辑能力。保留项是目标，不是保证；与母版对齐验口型和接触。"
+    },
+    {
+      "id": "keyframes",
+      "title": "关键状态锚点：少量独立图，明确过渡事件",
+      "mode": "参考生成：按序关键帧参考（4图）",
+      "duration": 12,
+      "assets": "图1、图2、图3：同一人物在同一场景的三个状态；图4：原始身份。",
+      "check": "每张状态图的持物、位置与方向一致；中间动作不要求按宫格逐格照抄。",
+      "sources": [
+        "guide",
+        "anchors"
+      ],
+      "body": "按顺序使用图1、图2、图3作为关键状态参考；三图是同一个主角在同一场景的不同时刻，不能变成三个人。图4仅维护原始身份。\n生成12秒镜头：起始状态是图1，结束状态是图3。图2表示门被打开后的站位，不是冻结画面。\n0—4秒：主角从门外伸出右手握住把手，左手仍拿包，门向室内转开。\n4—8秒：在图2所示的开门站位短暂停顿；先看清室内，再迈过门槛。不要跳过开门、不要重复关开门。\n8—12秒：到达图3的桌边位置，将左手包放在桌角；身体停稳，视线转向桌上的信。\n摄影机低强度侧向跟随，只为保持手、门和落点可见；光源始终来自室内窗户。无对白，保留门轴、脚步与包落桌声。",
+      "useNotes": "此模板使用全模态关键帧参考，不是独立首尾帧模式；不要把这4份素材按严格首尾帧模式提交。"
+    },
+    {
+      "id": "dialogue",
+      "title": "对白驱动表演：保留原句，给反应留时间",
+      "mode": "参考生成",
+      "duration": 18,
+      "assets": "图1角色甲、图2角色乙、图3场景；如有音色参考分别绑定，不能串人。",
+      "check": "对白逐字、说话人、停顿、反应顺序和口型；音乐单独听验。",
+      "sources": [
+        "dialogue",
+        "pv",
+        "audit"
+      ],
+      "body": "18秒双人对白镜头。图1是甲，图2是乙，图3是场景。甲在画面左侧门口，乙在右侧桌边；视线围绕对方与信件，不看摄影机。若上传音色参考，音频1只供甲、音频2只供乙；音色参考不添加台词。\n对白原文：甲：“你早就知道了？” 乙：“我想等你自己发现。” 甲：“可你连一句提醒都没有。” 不增删字，不新增旁白。\n0—4秒：中景，甲停在门口说第一句；尾字后停顿，右手握着的信仍未展开。\n4—9秒：乙先看一眼甲手中的信，吸一口气，再说第二句；手从桌边收回，身体不逼近甲。\n9—15秒：甲说第三句，声音比第一句低；说到“提醒”时才把信放低，肩部缓慢松下。摄影机小幅推近甲，乙保持在侧后景。\n15—18秒：两人沉默。甲看向信，乙欲开口又停住；没有哭喊，也没有突然拥抱。\n声音：对白清楚，纸张和室内环境声轻；无配乐、无字幕。不要用连续极近特写遮掉站位。",
+      "useNotes": "以项目原对白替换示例。时间段是节奏意图，输出后逐字听验，并检查动作时序。"
+    },
+    {
+      "id": "extend",
+      "title": "真实视频延长：先交接状态，再写后续",
+      "mode": "视频延长 / 视频续写",
+      "duration": 10,
+      "assets": "视频1：合格的前段；图1原始主角，图2场景。",
+      "check": "拿真实前段对接；身份、手持物、速度趋势、环境声；输出是否包含原段另核。",
+      "sources": [
+        "mtb",
+        "reshoot",
+        "runway"
+      ],
+      "body": "延长视频1的结尾，生成新的后续10秒。视频1是待延长源片。\n接续状态：主角已经迈过门槛，身体朝室内；右手拿钥匙，左手空着，门在身后半开。上一段的脚步尚未完全停住。图1维护原身份，图2维护室内布局与主光。\n0—4秒：延续未停的脚步走向桌边；保持同一运动方向，不重新出现开门动作。\n4—7秒：右手将钥匙放在桌角，再看向桌上的信；手与钥匙有明确接触，钥匙落桌后不复制。\n7—10秒：她停稳并抬眼望向窗外，摄影机缓慢停在侧面中景，留下一个完整的收束姿态。\n延续原片雨声的空间与音量趋势；不在接缝突然开始配乐，不加对白和字幕。",
+      "useNotes": "先选择真实延长入口。返回新增片段还是合并版本要核实；缺入口时，尾帧锚定新镜头只是替代制作。"
+    },
+    {
+      "id": "edit",
+      "title": "片段重拍：修改范围与保留项写在同一条",
+      "mode": "视频编辑 / 片段重拍",
+      "duration": null,
+      "assets": "从原片04—08秒截取的4秒片段，必要时附截帧注释。",
+      "check": "时间从所提交片段开始计；先看局部，再看前后接缝及声音。",
+      "sources": [
+        "xyq",
+        "reshoot"
+      ],
+      "body": "本次只修改已截取的4秒片段，它对应原片04—08秒；以下时间从本次输入片段0秒开始计算。\n修改对象：片段内主角拿钥匙的右手及钥匙接触门锁的动作。当前手没有接触门锁，需要改成钥匙插入锁孔、手腕轻转，再短暂停住。\n保留：主角脸与服装、头部朝向、左手包、门的位置、原构图、摄影机运动、光影和其他人物；不修改对白与环境声。\n0—2秒：右手将钥匙准确放进锁孔，钥匙与门锁保持接触，没有穿插门板；门暂不打开。\n2—4秒：手腕轻转后停住，保持结束手势，便于接回后段。\n不要加慢动作、额外切镜或新道具。",
+      "useNotes": "截取范围须符合当前入口限制。剪入后段前检查画面和声音接缝；保留项不承诺逐像素不变。"
+    },
+    {
+      "id": "greenscreen",
+      "title": "绿幕合成：替换背景，检查边缘与接地",
+      "mode": "视频编辑（入口支持绿幕素材时）",
+      "duration": null,
+      "assets": "视频1：自有绿幕人物片段；图1：背景；可加原始身份图。",
+      "check": "脚底接地、边缘残绿、透明/发丝、遮挡、投影与反射；必要时后期修复。",
+      "sources": [
+        "seed",
+        "launch"
+      ],
+      "body": "编辑视频1，将绿幕背景替换为图1的石桥环境。保留原人物动作、身份、服装、说话时序和持物。\n图1只提供环境结构与光线。桥面平面应与原人物脚底位置相接，人物尺度以桥栏杆为参照；不能让脚悬空或嵌入石面。\n主光从画面左侧高处来，人物明暗和桥面投影方向一致；投影随脚步变化，符合接触关系。人物背后的背景不要穿过身体；发丝与衣服边缘没有绿色溢色。\n只替换背景及与之必要匹配的光影，摄影机路径不变，不新增人物、对白、字幕或配乐。",
+      "useNotes": "需入口支持该素材。发丝、半透明材质和快速摆手边缘若出问题，另做后期精细抠像与光色匹配。"
+    }
+  ],
+  "sources": [
+    {
+      "id": "seed",
+      "title": "模型官方概述",
+      "url": "https://seed.bytedance.com/en/seedance2_5",
+      "scope": "官方模型能力；页面未标更新日。"
+    },
+    {
+      "id": "launch",
+      "title": "ByteDance Seed 发布公告",
+      "url": "https://seed.bytedance.com/en/blog/one-take-creation-flexible-referencing-introducing-seedance-2-5",
+      "scope": "2026-07-31；只用于发布与基础能力，不沿用当日 API 开放状态。"
+    },
+    {
+      "id": "xyq",
+      "title": "小云雀 2.5 使用手册",
+      "url": "https://xyq.jianying.com/tutorials/seedance-2-5",
+      "scope": "国内 Web/App 路径、超长和超分；未登录用户账号验收。"
+    },
+    {
+      "id": "xyq3d",
+      "title": "小云雀 3D 导演台",
+      "url": "https://xyq.jianying.com/tutorials/short-drama-agent-3d-director",
+      "scope": "官方动态预演入口说明。"
+    },
+    {
+      "id": "guide",
+      "title": "BytePlus 官方提示词指南",
+      "url": "https://docs.byteplus.com/en/docs/modelark/seedance-2-5-prompt-guide?redirect=1",
+      "scope": "页面更新 2026-09-28；全文重新核对。"
+    },
+    {
+      "id": "ark",
+      "title": "国内方舟 2.5 规范",
+      "url": "https://docs.volcengine.com/docs/ark/seedance-2-5?lang=zh",
+      "scope": "当前 API 边界；不是国内产品按钮。"
+    },
+    {
+      "id": "runway",
+      "title": "Runway 2.5 使用文档",
+      "url": "https://help.runwayml.com/hc/en-us/articles/53542207042323-Creating-with-Seedance-2-5",
+      "scope": "四模式与平台专属 Draft/Enhance；不照搬国内。"
+    },
+    {
+      "id": "openart",
+      "title": "OpenArt 平台教程",
+      "url": "https://openart.ai/blog/cinematic-ai-videos-with-seedance-2-5/",
+      "scope": "2026-08-12；平台指导兼推广材料，不作独立基准。"
+    },
+    {
+      "id": "previs",
+      "title": "擎苍与爱：白模预演演示",
+      "url": "https://www.douyin.com/video/7675379938517699859",
+      "scope": "2026-08-19；实际检查 14 个画面采样点。"
+    },
+    {
+      "id": "depth",
+      "title": "擎苍与爱：白模加深度",
+      "url": "https://jingxuan.douyin.com/m/video/7682275513968151850",
+      "scope": "2026-09-06；已读正文，未逐帧看完。"
+    },
+    {
+      "id": "huashu",
+      "title": "花叔：updream 预演实测",
+      "url": "https://www.huasheng.ai/insights/wechat-2247491605-1/",
+      "scope": "2026-08-17；原作者有 UI、输入分工与对照，入口为 updream。"
+    },
+    {
+      "id": "pv",
+      "title": "跳蛛先生：《余温》PV 复盘",
+      "url": "https://tiaozhuxiansheng.com/2026-10-01-pv-v1-1ddae81/",
+      "scope": "2026-10-01；有限样本，国际即梦 CLI 通道。"
+    },
+    {
+      "id": "anchors",
+      "title": "跳蛛先生：关键帧与锚点试镜",
+      "url": "https://tiaozhuxiansheng.com/2026-09-20-m02-v1-8100c2c/",
+      "scope": "2026-09-20，更新 10-01；单场景逐变量迭代。"
+    },
+    {
+      "id": "reshoot",
+      "title": "跳蛛先生：按切点重拍",
+      "url": "https://tiaozhuxiansheng.com/v1-5ee9070/",
+      "scope": "2026-09-18，更新 10-05；区分局部编辑与短段重新生成。"
+    },
+    {
+      "id": "coverage",
+      "title": "Tricky_Algae2625：母版换机位",
+      "url": "https://www.reddit.com/r/Seedance_AI/comments/1wnveqr/seedance_25_videotovideo_workflow_reshoot_the/",
+      "scope": "2026-09-23；作者自述，含服务推广，未复跑。"
+    },
+    {
+      "id": "mtb",
+      "title": "RealJamesOfficial：60 秒分段",
+      "url": "https://www.reddit.com/r/Seedance_AI/comments/1vu58tx/how_i_made_a_60second_mtb_video_with_seedance_25/",
+      "scope": "2026-08-21；两条 30 秒，未公布完整尝试日志。"
+    },
+    {
+      "id": "dialogue",
+      "title": "Fun_Walk_4965：29 秒对白",
+      "url": "https://www.reddit.com/r/Seedance_AI/comments/1vrjlk3/seedance_25_acting_prompt_tutorial_how_i_built_a/",
+      "scope": "2026-08-18；公开结构，未给完整执行 prompt。"
+    },
+    {
+      "id": "audit",
+      "title": "FlyAIgh：表演逐项审计",
+      "url": "https://www.flyaigh.com/blog/guide-ai-video-acting-directions",
+      "scope": "2026-09-01；测试日 08-29，5 秒与 8 秒各一次成功；未自行复跑。"
+    }
+  ],
+  "proposedProductFields": [
+    "platformProfile",
+    "operationIntent",
+    "assetReferenceRole",
+    "excludeFromReference",
+    "sourceVideo",
+    "clipRange",
+    "originalDialogue",
+    "actionEvents",
+    "handoffState",
+    "allowedChanges",
+    "qaChecklist"
+  ]
+}

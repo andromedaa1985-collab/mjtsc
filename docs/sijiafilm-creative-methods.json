@@ -1,0 +1,110 @@
+{
+  "format": "cineprompt-director-method-evidence",
+  "version": 1,
+  "checkedAt": "2026-10-13",
+  "subject": {
+    "title": "The Filter",
+    "authorWebsiteName": "SiJia Zheng / 郑思嘉",
+    "higgsfieldUsername": "zsjcak",
+    "identityLimit": "作者官网、Higgsfield作品与YouTube原片链已核实；小红书账号未取得互链直达页面。"
+  },
+  "evidenceScope": {
+    "recordsRead": 52,
+    "readablePromptRecords": 51,
+    "distinctPromptTexts": 48,
+    "closelyReadVideoPrompts": 7,
+    "closelyReadImagePrompts": 2,
+    "editorChainsRead": 1,
+    "scenes": ["SC02-Elevator", "SC04-Room", "SC07-Room2", "SC08-Lobby2", "IMAGES"],
+    "allGenerationsCollected": false,
+    "sampleAdoptionInFinalCutVerified": false,
+    "fullFilmShotAnalysisCompleted": false,
+    "replicatedGenerationTestCompleted": false,
+    "visualSampleLimit": "只核验原片4:19与4:29两个暂停帧，不能由静帧确认运镜、调色参数或对应生成记录是否采用。"
+  },
+  "sources": [
+    {"id": "project", "title": "The Filter：Higgsfield公开作品与工程", "url": "https://higgsfield.ai/@zsjcak/projects/the-filter"},
+    {"id": "author", "title": "郑思嘉 / SiJia Zheng：作者官网", "url": "https://www.sijiafilm.com/about"},
+    {"id": "film", "title": "作者官网作品列表", "url": "https://www.sijiafilm.com/films"},
+    {"id": "youtube", "title": "The Filter：作者原片", "url": "https://www.youtube.com/watch?v=jAyeHXC9yNk"}
+  ],
+  "principles": [
+    {
+      "id": "reference_roles",
+      "title": "参考图职责分工",
+      "sourceIds": ["project"],
+      "observation": "抽样记录分别指定身份、布局、道具或构图参考。",
+      "ourApplication": "为当前素材写明对象、职责和适用镜头。",
+      "applyWhen": "素材确实提供并完成实际关联。",
+      "limit": "平台引用不能跨入口照搬，不能编造编号或上传状态。"
+    },
+    {
+      "id": "performance_state",
+      "title": "情绪起止落到可见动作",
+      "sourceIds": ["project"],
+      "observation": "近景导演稿通过凝视、停顿和细小动作组织人物反应。",
+      "ourApplication": "记录起点、触发、少量可见变化及结束状态。",
+      "applyWhen": "人物反应是本段重点。",
+      "limit": "心理解释不是新增对白，台词以原剧本为准。"
+    },
+    {
+      "id": "space_and_camera",
+      "title": "空间与运镜有目的",
+      "sourceIds": ["project"],
+      "observation": "抽样调度稿明确站位、出入口、动作方向和结果。",
+      "ourApplication": "先写空间路径，再给机位一个观察或揭露目的。",
+      "applyWhen": "追逐、接触、进出或多主体调度。",
+      "limit": "不强制构图偏置或复杂运镜，不新增参考片场景。"
+    },
+    {
+      "id": "perception_anchor",
+      "title": "主客观变化保留锚点",
+      "sourceIds": ["project"],
+      "observation": "公开简报和反转稿保留可辨的空间关系。",
+      "ourApplication": "主观变化时区分两种状态、变化原因与可辨锚点。",
+      "applyWhen": "仅当原剧本明确包含主观感知、误认或现实反转。",
+      "limit": "不向普通故事添加感知异变、固定色系或视觉变形。"
+    },
+    {
+      "id": "sound_cue",
+      "title": "声音有声源与触发",
+      "sourceIds": ["project"],
+      "observation": "抽样导演稿使用画外声和提示声触发行为，工程另有独立音频素材。",
+      "ourApplication": "交代声源、时机、听者和反应，区分生成层与后期层。",
+      "applyWhen": "声音会改变注意或行动。",
+      "limit": "文件名不证明制作工具或最终混音，段内无音乐不等于全片无配乐。"
+    },
+    {
+      "id": "iteration",
+      "title": "小变量迭代",
+      "sourceIds": ["project"],
+      "observation": "工程有构图变体和生成视频进入编辑工具的记录。",
+      "ourApplication": "保存输入和版本，保留成功部分，仅改主要失败因素并人工验收。",
+      "applyWhen": "已有可对照输出，需要返工。",
+      "limit": "抽样变体种子不同，不是严格对照实验；未见遮罩证据时不称遮罩重绘。"
+    }
+  ],
+  "originalExamples": [
+    {"id": "micro_performance", "title": "6秒微表演", "durationSeconds": 6, "character": "林岚", "original": true, "generationVerified": false},
+    {"id": "spatial_reveal", "title": "12秒空间与遮挡揭露", "durationSeconds": 12, "character": "许棠", "original": true, "generationVerified": false},
+    {"id": "motivated_light", "title": "10秒光色与情绪转折", "durationSeconds": 10, "character": "沈禾", "original": true, "generationVerified": false}
+  ],
+  "runtimePolicy": {
+    "module": "src/lib/directorMethods.ts",
+    "dynamicResearchPromptsImported": false,
+    "examplesAreOptIn": true,
+    "currentScriptIsAuthoritative": true,
+    "providerSpecificReferenceIdsIncluded": false,
+    "officialRecipeClaimed": false,
+    "successRateClaimed": false
+  },
+  "originalAuthorPromptBodiesIncluded": false,
+  "limitations": [
+    "公开工程抽样不能证明每条记录被成片采用，也不能推断成功率。",
+    "项目简报称风格化3D，部分稿件追求手绘2D质感；文字目标不是实际输出规格。",
+    "稿件帧率文字、升采样和导出路线未完成实际验收。",
+    "官网列表7:41、播放器7:40、公开metadata约451.54秒口径不同，差异原因未确认。",
+    "原创模板未提交模型生成，国内入口的时长和引用能力需以实际界面为准。",
+    "这些原则是我们的研究取舍，不代表作者或平台授权的官方配方。"
+  ]
+}

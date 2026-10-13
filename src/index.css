@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+:root { color-scheme: dark; }
+body { margin: 0; font-family: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif; }
+button, input, select, textarea { font: inherit; }
+button:not(:disabled) { cursor: pointer; }
+:focus-visible { outline: 2px solid #93c5fd; outline-offset: 3px; }
+.stage-panel[hidden] { display: none; }
+.workspace-shell[hidden] { display: none; }
+@media (max-width: 1023px) { .stage-panel { min-height: 65dvh; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
 @layer utilities {
   .scrollbar-hide {
     /* IE and Edge */

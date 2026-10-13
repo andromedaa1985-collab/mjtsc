@@ -1,66 +1,38 @@
-import { motion } from 'motion/react';
-import { Sparkles, ArrowRight, Video, Image as ImageIcon, FileText } from 'lucide-react';
+import { ArrowRight, FileText, Film, Image as ImageIcon, LayoutTemplate, Video } from 'lucide-react';
+
+const workflow = [
+  { icon: FileText, title: '解析剧本', description: '导入故事，梳理人物关系与关键场景。' },
+  { icon: ImageIcon, title: '确定视觉', description: '细化角色外貌与场景，建立统一设定。' },
+  { icon: LayoutTemplate, title: '设计分镜', description: '安排景别、构图与动作，组织镜头节奏。' },
+  { icon: Video, title: '生成提示词', description: '将镜头设计整理成可编辑的视频提示词。' },
+];
 
 export default function LandingPage({ onEnter }: { onEnter: () => void }) {
   return (
-    <div className="min-h-screen bg-black text-white overflow-hidden flex flex-col items-center justify-center font-sans relative selection:bg-white/20">
-      {/* Atmospheric Background */}
-      <div className="fixed inset-0 z-0 pointer-events-none">
-        <div className="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] bg-blue-500/10 blur-[120px] rounded-full mix-blend-screen" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-white/5 blur-[120px] rounded-full mix-blend-screen" />
-      </div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 30 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8 }}
-        className="z-10 flex flex-col items-center max-w-4xl text-center px-6"
-      >
-        <div className="w-16 h-16 rounded-xl bg-white flex items-center justify-center mb-8">
-          <Sparkles className="w-8 h-8 text-black" />
+    <main className="flex min-h-dvh flex-col bg-zinc-950 px-5 py-6 text-white sm:px-8 sm:py-8">
+      <header className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4">
+        <div className="flex items-center gap-3"><span className="flex size-10 items-center justify-center rounded-xl bg-white text-zinc-950"><Film className="size-5" aria-hidden="true" /></span><span className="text-lg font-semibold">CinePrompt</span></div>
+        <span className="hidden text-sm text-zinc-400 sm:block">漫剧创作工作台</span>
+      </header>
+      <section className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center py-12 sm:py-16" aria-labelledby="landing-heading">
+        <div className="max-w-3xl">
+          <p className="mb-5 flex items-center gap-3 text-sm font-medium text-zinc-400"><span className="h-px w-8 bg-zinc-500" aria-hidden="true" />从故事开始，让镜头成形</p>
+          <h1 id="landing-heading" className="text-balance text-4xl font-semibold leading-tight sm:text-5xl lg:text-6xl">把你的剧本，<br />变成有章法的镜头。</h1>
+          <p className="mt-6 max-w-xl text-pretty text-base leading-8 text-zinc-300">放入剧本，自动梳理故事与人物场景，按剧情拆分镜头，并为每镜生成适合即梦 / 小云雀 Seedance 2.5 的提示词。完成后逐镜修改、复制或导出。</p>
+          <button type="button" onClick={onEnter} className="mt-8 inline-flex min-h-12 items-center justify-center gap-3 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-zinc-950 hover:bg-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-4 focus-visible:ring-offset-zinc-950">放入剧本，开始自动创作<ArrowRight className="size-4" aria-hidden="true" /></button>
+          <p className="mt-3 text-sm text-zinc-500">也可以从单镜头或人物提示词开始。</p>
         </div>
-        
-        <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6 text-white">
-          CinePrompt
-        </h1>
-        
-        <p className="text-sm text-white/50 mb-16 leading-relaxed max-w-2xl tracking-wide uppercase font-mono">
-          专业的影视级 AI 提示词引擎。<br />
-          深度剧本解析，精准角色控制，一键生成 Seedance 2.0 和 Banana 提示词。
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-16 w-full">
-          {[
-            { icon: FileText, title: '深度解析', desc: '自动提取核心角色和场景设定。' },
-            { icon: ImageIcon, title: '精准控制', desc: '对话式微调，实现完美的视觉生成。' },
-            { icon: Video, title: '动态镜头', desc: '一键输出视频运镜和提示词。' }
-          ].map((feature, i) => (
-            <motion.div 
-              key={i} 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: 0.2 + i * 0.1 }}
-              className="p-8 rounded-2xl border border-white/10 bg-transparent flex flex-col items-center text-center hover:bg-white/5 transition-colors"
-            >
-              <div className="w-12 h-12 rounded-full border border-white/20 flex items-center justify-center mb-6">
-                <feature.icon className="w-5 h-5 text-white" />
-              </div>
-              <h3 className="text-[10px] font-mono tracking-widest uppercase text-white mb-3">{feature.title}</h3>
-              <p className="text-xs text-white/40 leading-relaxed">{feature.desc}</p>
-            </motion.div>
+        <ol className="mt-14 grid gap-4 sm:grid-cols-2 lg:mt-16 lg:grid-cols-4">
+          {workflow.map(({ icon: Icon, title, description }, index) => (
+            <li key={title} className="rounded-2xl border border-white/10 bg-zinc-900/40 p-5 sm:p-6">
+              <div className="mb-6 flex items-center justify-between"><Icon className="size-5 text-zinc-300" aria-hidden="true" /><span className="font-mono text-xs tabular-nums text-zinc-500">0{index + 1}</span></div>
+              <h2 className="text-balance text-base font-semibold">{title}</h2>
+              <p className="mt-3 text-pretty text-sm leading-6 text-zinc-400">{description}</p>
+            </li>
           ))}
-        </div>
-
-        <motion.button
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
-          onClick={onEnter}
-          className="group flex items-center gap-3 px-8 py-3.5 rounded-full bg-white text-black font-bold text-xs tracking-widest uppercase transition-all hover:bg-white/90"
-        >
-          进入工作区
-          <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-        </motion.button>
-      </motion.div>
-    </div>
+        </ol>
+      </section>
+      <footer className="mx-auto w-full max-w-6xl border-t border-white/10 pt-5 text-xs leading-6 text-zinc-500">CinePrompt · 让创作意图在每一步都清晰可见</footer>
+    </main>
   );
 }

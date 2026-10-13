@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "CinePrompt 漫剧创作工作台",
+  "description": "导入剧本，自动理解故事、拆分分镜并生成即梦与小云雀 Seedance 2.5 视频提示词。",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }
