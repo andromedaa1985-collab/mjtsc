@@ -1,20 +1,64 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# CinePrompt · 漫剧创作工作台
 
-# Run and deploy your AI Studio app
+从剧本解析、人物与场景设定，到可编辑分镜和视频提示词。当前是带 Firebase 账号认证的创作工具，额度用于试用记账，在线充值暂未接入。
 
-This contains everything you need to run your app locally.
+## 本地运行
 
-View your app in AI Studio: https://ai.studio/apps/a642a4e8-a889-42fa-b3ca-5e3b45060684
+要求 Node.js 22.18+，建议使用 Node.js 24 LTS。
 
-## Run Locally
+```sh
+npm ci
+```
 
-**Prerequisites:**  Node.js
+复制 `.env.example` 为 `.env`，填入自己的 `GEMINI_API_KEY` 和 `DEEPSEEK_API_KEY`，再运行：
 
+```sh
+npm run dev
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+访问 `http://localhost:3000`。服务器会加载 `.env`，密钥仅在服务器使用，不会注入浏览器构建。仓库历史曾包含供应商密钥，原持有人需要先在对应后台作废并换新；删除源码中的值不能撤销旧密钥。
+
+## 账号与部署
+
+- `firebase-applet-config.json` 为前端公开配置。请确认对应 Firebase 项目的 Email/Password、Google 登录、授权域名和 Firestore 数据库设置；更换项目时需一并更新该文件。
+- 两个 AI 接口必须携带 Firebase ID token，账号邮箱必须验证。服务器用配置中的 project ID 与 Firebase 公开签名证书验签，不需要用于数据库写入的服务账号；运行主机必须能够访问 Firebase 证书及供应商服务。
+- 将 `firestore.rules` 部署到配置中的对应数据库。新账号只能初始化 100,000 试用积分；客户端只允许减少积分及编辑显示资料，不能提升权限或增加额度。规则文件的改变不会自动更新云端规则。
+- 试用额度在成功请求后由客户端事务记账，不能用于真实收费或可信的余额准入。正式计费需服务端额度预留、扣费事务、支付回调和持久化限流。
+- 内存限流为每个 UID 每分钟 20 次、同时 2 个请求，仅保护单个服务器实例。多实例部署需使用共享限流存储。
+
+生产运行：
+
+```sh
+npm run build
+npm start
+```
+
+`npm start` 使用生产静态构建，需要先执行 build。可设置 `PORT`（默认 3000）和 `AI_REQUEST_TIMEOUT_MS`（默认 90 秒，限制 1–300 秒）。生产主机必须提供相同的 `.env` 或环境变量。`npm run preview` 仅供前端构建预览，不提供 AI 接口。
+
+## 创作行为
+
+- 剧本支持输入、拖放与导入 `.docx` / UTF-8 `.txt`，文件最大 5 MB、剧本最长 30,000 字。旧 `.doc` 请先转换为 `.docx`。
+- AI 输出经过结构校验后才替换已有内容。失败会保留剧本和旧结果，显示原因。长剧本的分镜分段全部完成后才提交；当前标签页内重试会复用已成功的分段。
+- 分镜保存原文摘录、逐字对白与连续性说明，可手动编辑动作、运镜、场景和人物。编辑某镜头会清除它的旧视频提示词，保留镜头参数。
+- 视频生成参考当前分镜、相邻片段和匹配的人物/场景；“色彩关系”和“镜头目的与空间路径”支持主动控制。生成正文与后期完成建议分开，复制按钮只复制生成正文。
+- 时间轴检查仅提示可识别时间段的空隙、重叠或总时长不一致，不能保证生成的视频满足要求。
+- 主流程草稿按账号保存于当前浏览器，包含剧本、人物、分镜、镜头参数与视频提示词；可导出 JSON 备份。损坏缓存会暂停保存并保留原始值，提供先备份后重新保存的入口。旧版无账号草稿须主动导入。
+- 已访问步骤保持挂载，切换步骤保留正在编辑的文字和请求状态；单镜头工具的未提交文字目前仅在当前工作区会话内保留。账号退出后组件会卸载。
+
+## 参考研究
+
+[docs/creative-reference-research.json](docs/creative-reference-research.json) 记录用户指定原片、国外作者材料、实际抽样覆盖及通用创作规则。研究包含三部抖音原片与 Paul Trillo 官方 Vimeo 的 59 张抽帧观察，以及 shy kids 的一手制作访谈。
+
+作品观察、公开作者 prompt 与本次新写候选 prompt 分别记录。抽帧分析不能证明全片剪辑频率、音频表现、真实镜头设备或 LUT；新规则也尚未做真实 AI 生成效果验收。视频创作规则集中于 `src/lib/creativePrompts.ts`。
+
+## 验证
+
+```sh
+npm run lint
+npm test
+npm run build
+```
+
+自动化测试覆盖认证边界、输入/响应结构、超时、限流、草稿隔离与缓存恢复、时间轴以及创作上下文污染。接口测试使用 stub；浏览器 QA 使用临时隔离页面和假响应，不调用真实 AI 或 Firebase 账号。
+
+依赖更新采用兼容范围内的修补。本轮最终依赖审计仍有 9 项（1 low、4 moderate、4 high），主要涉及 Firebase 传递依赖和 Mammoth 的 CLI 依赖等；没有使用会降级 Firebase/Mammoth 的 `npm audit fix --force`。这部分需单独评估版本迁移与回归。

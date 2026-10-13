@@ -1,0 +1,25 @@
+{
+  "reviewedAt": "2026-10-13",
+  "timezone": "Asia/Shanghai",
+  "scope": "Selected visual samples, public author material and inferred candidate authoring methods; no full-film shot count, audio review, LUT recovery or live generation acceptance.",
+  "sampleCount": 59,
+  "works": [
+    {"title":"万物生：问心","creator":"命比梦长","source":"https://www.douyin.com/video/7648976224903105842","durationSeconds":701.334,"sampleSeconds":[5,30,75,76,77,140,210,300,301,302,420,500,580,650,680],"evidence":"Actual browser playback and inspected screenshots","methods":["劳动动作与前中后景建立世界可信度","人物反应与威胁尺度承担不同信息","暖土日景与冷青夜景按场景变化，局部发光作为材质锚点"]},
+    {"title":"异种纪元 第4集：源契","creator":"淞希","source":"https://www.douyin.com/video/7689143123192155434","durationSeconds":391.6,"sampleSeconds":[3,8,9,10,15,45,98,130,150,253,254,255,270,335,350,375],"evidence":"Actual browser playback and inspected screenshots","methods":["人体、日常道具与设施提供巨物尺度参照","道具细节与人物反应连接异常","强调色随事件升级，不把封面色卡当作全片调色"]},
+    {"title":"小麦战记 40分钟长剧版 第一集","creator":"山笑","source":"https://www.douyin.com/video/7684658972053310746","durationSeconds":2433.27,"sampleSeconds":[5,25,60,61,62,150,151,152,450,750,1050,1350,1650,1950,2250,2390],"evidence":"Actual browser playback and inspected screenshots","methods":["共同任务、目光和手部活动组织人物关系","生活空间与奇观空间使用不同景别和光色","雾、门洞、鸟影等属于故事空间的元素可用于转场候选"]},
+    {"title":"Washed Out — The Hardest Part","creator":"Paul Trillo","source":"https://vimeo.com/941713443","durationSeconds":242.416679,"sampleSeconds":[3,4,5,12,13,14,35,36,37,85,140,195],"evidence":"Actual browser playback, inspected screenshots, author interview and publicly shared prompt","publishedPrompt":"https://docs.google.com/document/d/1x37Ci2-EV7HINasW7cyHP9ZobQjDy4j-qHq7G6dO2j8/edit","interview":"https://nofilmschool.com/ai-music-video","methods":["固定空间/运动语法后组织不同事件","前景遮挡、门洞与中心透视提供可解释路径","复古意图允许冷环境与局部暖焦点，不强制全幅暖色"]},
+    {"title":"Air Head","creator":"shy kids","source":"https://openai.com/index/sora-first-impressions/","interview":"https://www.fxguide.com/fxfeatured/actually-using-sora/","evidence":"Author workflow interview only; no actual film-frame inspection in this round","methods":["角色与道具材质等识别锚点独立于镜头变化","裁切、重定时、VFX清理和完整调色属于后期环节"]}
+  ],
+  "integratedRules": [
+    "剧情、原文对白和当前片段事件优先于视觉形容词",
+    "每镜一个主要观察意图，写起点、路径、动作结果与结束构图",
+    "让前景遮挡和转场物属于当前剧本空间",
+    "用人物、道具、地形和建筑的相对关系表达尺度",
+    "锁定身份/造型/持物/伤势与相邻片段落点",
+    "明确主体、环境、主光与强调色的关系",
+    "按事件决定时间段，允许简单表演使用连续长镜头",
+    "生成正文与后期复核建议分别输出"
+  ],
+  "notTransferred": ["原作者角色、台词和剧情片段","未经核实的平台官方红线","把所有镜头固定为英雄居中或复杂运镜","把全片强制套成同一暖黄或红黑色卡","把画质、摄影机和引擎名当作可保证效果的参数"],
+  "candidatePromptsStatus":"New authoring proposals derived from analysis, not recovered private originals; not generated or visually accepted."
+}
