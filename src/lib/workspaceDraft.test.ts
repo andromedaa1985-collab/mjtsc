@@ -44,3 +44,23 @@ test('duplicate shot identities cannot hide another saved shot', () => {
   const shot = { shotNumber: 1, action: '停住', camera: '固定近景', scene: '门口', charactersInvolved: [] };
   assert.throws(() => validateDraft({ ...emptyDraft, storyboards: [shot, { ...shot, action: '开门' }] }));
 });
+
+test('new drafts open the automatic studio while old drafts retain their workflow', () => {
+  assert.equal(emptyDraft.currentStage, 'auto-director');
+  const oldDraft = { version: 1, currentStage: 'script', showLanding: false, scriptData: '旧剧本', charactersAndScenes: null, storyboards: null };
+  const restored = validateDraft(oldDraft);
+  assert.equal(restored.currentStage, 'script');
+  assert.equal(restored.directorProject, null);
+  assert.equal(restored.directorCheckpoint, null);
+  assert.equal(restored.directorSettings.platform, emptyDraft.directorSettings.platform);
+});
+
+test('automatic studio settings are persisted and invalid checkpoints are rejected', () => {
+  const storage = memory();
+  const draft = { ...emptyDraft, directorSettings: { ...emptyDraft.directorSettings, platform: 'jimeng' as const, rhythm: 'dialogue' as const } };
+  assert.equal(saveDraft(storage, 'writer', draft), '');
+  assert.deepEqual(loadDraft(storage, 'writer').draft.directorSettings, draft.directorSettings);
+  assert.throws(() => validateDraft({ ...draft, directorCheckpoint: { version: 1, sourceScript: '错误结构' } }));
+  assert.throws(() => validateDraft({ ...draft, directorProject: { version: 1, shots: '错误结构' } }));
+  assert.throws(() => validateDraft({ ...draft, directorSettings: { ...draft.directorSettings, platform: 'unsupported' } }));
+});

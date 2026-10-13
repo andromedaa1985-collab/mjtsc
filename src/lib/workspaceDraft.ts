@@ -1,4 +1,6 @@
-export type Stage = 'script' | 'characters' | 'storyboard' | 'video' | 'single-prompt';
+import { defaultDirectorSettings, validateDirectorProject, validateDirectorCheckpoint, validateDirectorSettings, type DirectorProject, type DirectorCheckpoint, type DirectorSettings } from './autoDirector';
+
+export type Stage = 'auto-director' | 'script' | 'characters' | 'storyboard' | 'video' | 'single-prompt';
 export interface WorkspaceDraft {
   version: 1;
   currentStage: Stage;
@@ -7,13 +9,17 @@ export interface WorkspaceDraft {
   analyzedScript?: string;
   charactersAndScenes: any;
   storyboards: any[] | null;
+  directorSettings: DirectorSettings;
+  directorProject: DirectorProject | null;
+  directorCheckpoint: DirectorCheckpoint | null;
 }
 
 export const emptyDraft: WorkspaceDraft = {
-  version: 1, currentStage: 'script', showLanding: true,
+  version: 1, currentStage: 'auto-director', showLanding: true,
   scriptData: '', charactersAndScenes: null, storyboards: null,
+  directorSettings: { ...defaultDirectorSettings }, directorProject: null, directorCheckpoint: null,
 };
-const stages: Stage[] = ['script', 'characters', 'storyboard', 'video', 'single-prompt'];
+const stages: Stage[] = ['auto-director', 'script', 'characters', 'storyboard', 'video', 'single-prompt'];
 const isRecord = (value: unknown): value is Record<string, any> =>
   !!value && typeof value === 'object' && !Array.isArray(value);
 const isAsset = (value: unknown) => isRecord(value) &&
@@ -47,6 +53,9 @@ export function validateDraft(value: unknown): WorkspaceDraft {
   }
   return { version: 1, currentStage: value.currentStage, showLanding: value.showLanding,
     scriptData: value.scriptData, charactersAndScenes: assets, storyboards: value.storyboards,
+    directorSettings: value.directorSettings === undefined ? { ...defaultDirectorSettings } : validateDirectorSettings(value.directorSettings),
+    directorProject: value.directorProject == null ? null : validateDirectorProject(value.directorProject),
+    directorCheckpoint: value.directorCheckpoint == null ? null : validateDirectorCheckpoint(value.directorCheckpoint),
     ...(typeof value.analyzedScript === 'string' ? { analyzedScript: value.analyzedScript } : {}) };
 }
 

@@ -7,6 +7,7 @@ import { GoogleGenAI } from '@google/genai';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { createAiRouter, ApiError, requireContent } from './server/ai-api.ts';
+import { deepSeekRequest, deepSeekResult } from './server/deepseek-provider.ts';
 
 const firebaseConfig = JSON.parse(
   readFileSync(new URL('./firebase-applet-config.json', import.meta.url), 'utf8'),
@@ -58,11 +59,7 @@ async function startServer() {
       const response = await fetch('https://api.deepseek.com/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model: 'deepseek-chat',
-          messages: input.messages,
-          response_format: input.responseFormat,
-        }),
+        body: JSON.stringify(deepSeekRequest(input, process.env)),
         signal,
       });
       if (!response.ok) {
@@ -75,7 +72,7 @@ async function startServer() {
         );
       }
       const data = await response.json();
-      return { content: requireContent(data?.choices?.[0]?.message?.content), usage: data?.usage };
+      return deepSeekResult(data);
     },
   }));
   app.use('/api', (_req, res) => {

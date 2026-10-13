@@ -212,3 +212,33 @@ test('the concurrency cap blocks a second in-flight generation', async (t) => {
   release();
   assert.equal((await first).status, 200);
 });
+
+test('stopping the client aborts provider work and frees its concurrency slot', async (t) => {
+  let invocation = 0;
+  let started!: () => void;
+  let signalAborted!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const stopped = new Promise<void>(resolve => { signalAborted = resolve; });
+  const { post, url } = await fixture(t, {
+    concurrentRequests: 1,
+    generateDeepSeek: async (_input, signal) => {
+      invocation += 1;
+      if (invocation > 1) return { content: 'next request' };
+      signal.addEventListener('abort', signalAborted, { once: true });
+      started();
+      return new Promise(() => {});
+    },
+  });
+  const controller = new AbortController();
+  const request = fetch(`${url}/deepseek`, {
+    method: 'POST', signal: controller.signal,
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer verified' },
+    body: JSON.stringify(deepSeekBody),
+  });
+  const rejected = assert.rejects(request, error => error instanceof Error && error.name === 'AbortError');
+  await ready;
+  controller.abort();
+  await rejected;
+  await stopped;
+  assert.equal((await post('deepseek', deepSeekBody)).status, 200);
+});

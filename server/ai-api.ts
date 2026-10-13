@@ -102,9 +102,18 @@ export function requireContent(content: unknown): string {
   return content;
 }
 
-async function withTimeout<T>(task: (signal: AbortSignal) => Promise<T>, timeoutMs: number): Promise<T> {
+async function withTimeout<T>(task: (signal: AbortSignal) => Promise<T>, timeoutMs: number, parentSignal?: AbortSignal): Promise<T> {
   const controller = new AbortController();
+  if (parentSignal?.aborted) throw new ApiError(499, 'REQUEST_CANCELLED', '生成已停止。');
   let timer: ReturnType<typeof setTimeout>;
+  let cancel: () => void = () => {};
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    cancel = () => {
+      reject(new ApiError(499, 'REQUEST_CANCELLED', '生成已停止。'));
+      controller.abort();
+    };
+    parentSignal?.addEventListener('abort', cancel, { once: true });
+  });
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       // Reject first so a provider abort cannot replace the timeout message.
@@ -113,9 +122,10 @@ async function withTimeout<T>(task: (signal: AbortSignal) => Promise<T>, timeout
     }, timeoutMs);
   });
   try {
-    return await Promise.race([task(controller.signal), timeout]);
+    return await Promise.race([task(controller.signal), timeout, cancelled]);
   } finally {
     clearTimeout(timer!);
+    parentSignal?.removeEventListener('abort', cancel);
   }
 }
 
@@ -157,6 +167,10 @@ export function createAiRouter(dependencies: AiDependencies) {
     router.post(provider.route, async (req, res, next) => {
       const uid: string = res.locals.uid;
       let acquired = false;
+      const requestController = new AbortController();
+      const disconnect = () => { if (!res.writableEnded) requestController.abort(); };
+      req.once('aborted', disconnect);
+      res.once('close', disconnect);
       try {
         const input = provider.validate(req.body);
         const timestamp = now();
@@ -179,11 +193,14 @@ export function createAiRouter(dependencies: AiDependencies) {
         const result = await withTimeout(
           (signal) => provider.generate(input as GeminiInput & DeepSeekInput, signal),
           dependencies.timeoutMs ?? 90000,
+          requestController.signal,
         );
         res.json({ content: requireContent(result.content), usage: result.usage });
       } catch (error) {
         next(error);
       } finally {
+        req.removeListener('aborted', disconnect);
+        res.removeListener('close', disconnect);
         if (acquired) {
           const remaining = (active.get(uid) ?? 1) - 1;
           if (remaining > 0) active.set(uid, remaining);
@@ -194,6 +211,7 @@ export function createAiRouter(dependencies: AiDependencies) {
   }
 
   const handleError: ErrorRequestHandler = (error, _req, res, _next) => {
+    if (res.destroyed || res.writableEnded) return;
     if (error instanceof ApiError) {
       res.status(error.status).json({ error: error.message, code: error.code });
       return;

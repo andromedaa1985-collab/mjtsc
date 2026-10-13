@@ -5,6 +5,7 @@ import { auth, logOut, db } from './lib/firebase';
 import { onAuthStateChanged, sendEmailVerification, type User } from 'firebase/auth';
 import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { cn } from './lib/utils';
+import { generateDeepSeekContent } from './lib/deepseek';
 import { draftKey, emptyDraft, loadDraft, loadLegacyDraft, saveDraft, type Stage, type WorkspaceDraft } from './lib/workspaceDraft';
 import Login from './components/Login';
 import LandingPage from './components/LandingPage';
@@ -15,8 +16,10 @@ const CharacterSceneRefinement = lazy(() => import('./components/CharacterSceneR
 const StoryboardGeneration = lazy(() => import('./components/StoryboardGeneration'));
 const VideoPromptGeneration = lazy(() => import('./components/VideoPromptGeneration'));
 const SinglePromptGenerator = lazy(() => import('./components/SinglePromptGenerator'));
+const AutoDirectorStudio = lazy(() => import('./components/AutoDirectorStudio'));
 export type { Stage } from './lib/workspaceDraft';
 const stages = [
+  { id: 'auto-director', label: '自动创作', icon: Sparkles, step: '' },
   { id: 'script', label: '剧本解析', icon: BookOpen, step: '01' },
   { id: 'characters', label: '人物与场景', icon: Users, step: '02' },
   { id: 'storyboard', label: '分镜设计', icon: LayoutTemplate, step: '03' },
@@ -54,7 +57,7 @@ export function Workspace({ user, credits, accountError = '' }: { user: User; cr
   };
   const draftRef = useRef(draft); draftRef.current = draft;
   const scriptOutdated = typeof draft.analyzedScript === 'string' && draft.analyzedScript !== draft.scriptData;
-  const canVisit = (stage: Stage) => stage === 'script' || stage === 'single-prompt' ||
+  const canVisit = (stage: Stage) => stage === 'auto-director' || stage === 'script' || stage === 'single-prompt' ||
     (stage === 'characters' ? !!draft.charactersAndScenes : !!draft.storyboards?.length);
   const activeStage: Stage = canVisit(draft.currentStage) ? draft.currentStage : 'script';
   const [visited, setVisited] = useState<Stage[]>([activeStage]);
@@ -103,7 +106,7 @@ export function Workspace({ user, credits, accountError = '' }: { user: User; cr
     } catch { setMessage('旧版草稿格式异常，请保留浏览器缓存以便恢复。'); }
   };
   return <>
-    {draft.showLanding && <LandingPage onEnter={() => update('showLanding', false)} />}
+    {draft.showLanding && <LandingPage onEnter={() => { navigate('auto-director'); update('showLanding', false); }} />}
     <div hidden={draft.showLanding} className="workspace-shell">
     <div className="flex min-h-dvh flex-col bg-[#09090b] font-sans text-white lg:h-dvh lg:flex-row">
     <a href="#workspace-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-white focus:px-4 focus:py-3 focus:text-black">跳到创作内容</a>
@@ -115,7 +118,7 @@ export function Workspace({ user, credits, accountError = '' }: { user: User; cr
         </button>
         <button onClick={openSettings} aria-label="草稿与设置" className="rounded-lg p-2 text-white/60 lg:hidden"><Settings className="size-5" /></button>
       </div>
-      <p className="mb-3 hidden text-xs text-white/45 lg:block">从故事到镜头</p>
+      <p className="mb-3 hidden text-xs text-white/45 lg:block">自动创作与逐步精修</p>
       <nav aria-label="创作步骤" className="flex gap-2 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible">
         {stages.map(stage => {
           const Icon = stage.icon; const enabled = canVisit(stage.id);
@@ -135,10 +138,11 @@ export function Workspace({ user, credits, accountError = '' }: { user: User; cr
         <div className="flex items-center gap-2"><button onClick={exportDraft} className="flex min-h-10 items-center gap-2 rounded-lg border border-white/15 px-3 text-xs text-white/80 hover:bg-white/5"><Download className="size-4" />导出草稿</button><button ref={rechargeButtonRef} onClick={() => setRechargeOpen(true)} className="min-h-10 rounded-lg border border-white/15 px-3 text-xs text-white/60 hover:bg-white/5">试用额度 <span className="font-mono tabular-nums text-white">{credits === null ? '—' : credits.toLocaleString()}</span></button><button onClick={() => { logOut().catch(() => setMessage('退出失败，请稍后重试。')); }} className="min-h-10 rounded-lg px-2 text-xs text-white/60 hover:text-white">退出</button></div>
       </header>
       {(storageError || accountError || message) && <div role="alert" className="mx-4 mt-4 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm text-amber-100 sm:mx-6">{storageError || accountError || message}{storageError && <button onClick={openSettings} className="ml-3 underline">处理草稿保存</button>}</div>}
-      {scriptOutdated && <div role="status" className="mx-4 mt-4 rounded-xl border border-white/15 p-3 text-sm text-white/70 sm:mx-6">剧本已修改，现有设定和分镜仍来自上次解析。<button onClick={() => navigate('script')} className="ml-3 underline">重新解析最新剧本</button></div>}
+      {scriptOutdated && activeStage !== 'auto-director' && <div role="status" className="mx-4 mt-4 rounded-xl border border-white/15 p-3 text-sm text-white/70 sm:mx-6">剧本已修改，现有设定和分镜仍来自上次解析。<button onClick={() => navigate('script')} className="ml-3 underline">重新解析最新剧本</button></div>}
       <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8"><div className="mx-auto max-w-6xl lg:h-full">
         {panels.map(stage => <section key={stage} hidden={activeStage !== stage} className="stage-panel h-full" aria-label={stages.find(item => item.id === stage)?.label}><Suspense fallback={<Loading />}>
           {stage === 'single-prompt' && <SinglePromptGenerator />}
+          {stage === 'auto-director' && <AutoDirectorStudio script={draft.scriptData} onScriptChange={value => update('scriptData', value)} settings={draft.directorSettings} onSettingsChange={value => update('directorSettings', value)} project={draft.directorProject} onProjectChange={value => update('directorProject', value)} checkpoint={draft.directorCheckpoint} onCheckpointChange={value => update('directorCheckpoint', value)} generate={generateDeepSeekContent} />}
           {stage === 'script' && <ScriptInput scriptData={draft.scriptData} setScriptData={value => update('scriptData', value)} setCharactersAndScenes={value => setDraft(previous => ({ ...previous, charactersAndScenes: value, storyboards: null, analyzedScript: previous.scriptData }))} onNext={() => advance('script', 'characters')} />}
           {stage === 'characters' && <CharacterSceneRefinement scriptData={draft.scriptData} charactersAndScenes={draft.charactersAndScenes} setCharactersAndScenes={value => setDraft(previous => ({ ...previous, charactersAndScenes: value, storyboards: null }))} setStoryboards={setStoryboards} onNext={() => advance('characters', 'storyboard')} />}
           {stage === 'storyboard' && <StoryboardGeneration charactersAndScenes={draft.charactersAndScenes} storyboards={draft.storyboards} setStoryboards={setStoryboards} onNext={() => advance('storyboard', 'video')} />}
@@ -148,7 +152,7 @@ export function Workspace({ user, credits, accountError = '' }: { user: User; cr
     </main>
     <RechargeModal isOpen={rechargeOpen} onClose={() => setRechargeOpen(false)} credits={credits} returnFocusRef={rechargeButtonRef} />
     <Dialog.Root open={settingsOpen} onOpenChange={setSettingsOpen}><Dialog.Portal><Dialog.Overlay className="fixed inset-0 z-40 bg-black/75" /><Dialog.Content onCloseAutoFocus={event => { event.preventDefault(); settingsOpenerRef.current?.focus(); }} className="fixed top-1/2 left-1/2 z-50 max-h-[85dvh] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-white/15 bg-[#15151b] p-6 text-white shadow-xl">
-      <Dialog.Title className="text-balance text-xl font-semibold">草稿与设置</Dialog.Title><Dialog.Description className="mt-3 text-pretty text-sm leading-6 text-white/60">此账号的剧本、人物、分镜、镜头参数和视频提示词自动保存到本机浏览器。切换设备前请导出备份。</Dialog.Description>
+      <Dialog.Title className="text-balance text-xl font-semibold">草稿与设置</Dialog.Title><Dialog.Description className="mt-3 text-pretty text-sm leading-6 text-white/60">此账号的剧本、自动创作项目、已完成步骤与逐步精修草稿保存在本机浏览器。切换设备前请导出备份。</Dialog.Description>
       <div className="mt-6 space-y-3"><button onClick={exportDraft} className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-medium text-black"><Download className="size-4" />导出当前创作草稿</button>
         {savePaused && <button onClick={() => { try { downloadText(window.localStorage.getItem(draftKey(user.uid)) || '{}', 'CinePrompt-原始缓存备份.json'); setSavePaused(false); setStorageError(''); } catch { setMessage('浏览器缓存不可读取，请先导出当前创作草稿。'); } }} className="min-h-11 w-full rounded-xl border border-amber-200/25 px-4 text-sm text-amber-100">备份原始缓存并启用保存</button>}
         {!draft.scriptData && !draft.charactersAndScenes && !draft.storyboards?.length && <button onClick={importLegacy} className="min-h-11 w-full rounded-xl border border-white/15 px-4 text-sm text-white/80">导入此浏览器的旧版草稿</button>}

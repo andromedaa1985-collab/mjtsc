@@ -18,8 +18,8 @@ export default function LandingPage({ onEnter }: { onEnter: () => void }) {
         <div className="max-w-3xl">
           <p className="mb-5 flex items-center gap-3 text-sm font-medium text-zinc-400"><span className="h-px w-8 bg-zinc-500" aria-hidden="true" />从故事开始，让镜头成形</p>
           <h1 id="landing-heading" className="text-balance text-4xl font-semibold leading-tight sm:text-5xl lg:text-6xl">把你的剧本，<br />变成有章法的镜头。</h1>
-          <p className="mt-6 max-w-xl text-pretty text-base leading-8 text-zinc-300">在一个工作台完成剧本解析、人物与场景设定、分镜设计，以及视频提示词创作。你负责故事，我们协助梳理镜头。</p>
-          <button type="button" onClick={onEnter} className="mt-8 inline-flex min-h-12 items-center justify-center gap-3 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-zinc-950 hover:bg-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-4 focus-visible:ring-offset-zinc-950">进入创作工作台<ArrowRight className="size-4" aria-hidden="true" /></button>
+          <p className="mt-6 max-w-xl text-pretty text-base leading-8 text-zinc-300">放入剧本，自动梳理故事与人物场景，按剧情拆分镜头，并为每镜生成适合即梦 / 小云雀 Seedance 2.5 的提示词。完成后逐镜修改、复制或导出。</p>
+          <button type="button" onClick={onEnter} className="mt-8 inline-flex min-h-12 items-center justify-center gap-3 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-zinc-950 hover:bg-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-4 focus-visible:ring-offset-zinc-950">放入剧本，开始自动创作<ArrowRight className="size-4" aria-hidden="true" /></button>
           <p className="mt-3 text-sm text-zinc-500">也可以从单镜头或人物提示词开始。</p>
         </div>
         <ol className="mt-14 grid gap-4 sm:grid-cols-2 lg:mt-16 lg:grid-cols-4">

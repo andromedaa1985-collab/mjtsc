@@ -1,13 +1,13 @@
 import { db, auth, getAiRequestHeaders } from './firebase';
 import { doc, runTransaction } from 'firebase/firestore';
 
-export async function generateDeepSeekContent(prompt: string, isJson: boolean = false) {
+export async function generateDeepSeekContent(prompt: string, isJson: boolean = false, signal?: AbortSignal) {
   try {
     const userId = auth.currentUser?.uid;
     const response = await fetch('/api/deepseek', {
       method: 'POST',
       headers: await getAiRequestHeaders(),
-      signal: AbortSignal.timeout(310000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(310000)]) : AbortSignal.timeout(310000),
       body: JSON.stringify({
         messages: [
           { role: 'user', content: prompt }
@@ -50,6 +50,7 @@ export async function generateDeepSeekContent(prompt: string, isJson: boolean = 
     
     return content;
   } catch (error) {
+    if (signal?.aborted) throw new DOMException('生成已停止，已完成内容保留。', 'AbortError');
     if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
       throw new Error('AI 响应超时，请稍后重试。');
     }
