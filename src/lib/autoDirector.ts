@@ -141,8 +141,8 @@ function analysis(value: unknown, chunk: DirectorChunk): DirectorChunkAnalysis {
 }
 
 interface DialogueSpan { start: number; end: number; speaker: string }
-/** Extract words from the authority script, never from the model's paraphrase. */
-function dialogueSpans(script: string, characterNames: string[]): DialogueSpan[] {
+/** The shipped v1 extraction is retained only to recognise legitimate saved data. */
+function legacyDialogueSpans(script: string, characterNames: string[]): DialogueSpan[] {
   const spans: DialogueSpan[] = [];
   const explicitLines: { start: number; end: number }[] = [];
   for (const match of script.matchAll(/^[\t ]*([^\s:：\n]{1,30})\s*[:：][\t ]*([^\r\n]*)/gm)) {
@@ -179,10 +179,117 @@ function dialogueSpans(script: string, characterNames: string[]): DialogueSpan[]
   }
   return spans.sort((left, right) => left.start - right.start);
 }
-function canonicalDialogue(script: string, start: number, end: number, spans: DialogueSpan[]): string {
+interface QuoteRange { start: number; end: number; contentStart: number; contentEnd: number }
+function quoteRanges(text: string): QuoteRange[] {
+  const result: QuoteRange[] = [];
+  const closes: Record<string, string> = { '“': '”', '「': '」', '『': '』', '"': '"', '＂': '＂' };
+  const stack: { start: number; close: string }[] = [];
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    if (character === '\\') { index++; continue; }
+    if (stack.length && character === stack.at(-1)!.close) {
+      const opened = stack.pop()!;
+      if (!stack.length) result.push({ start: opened.start, end: index + 1, contentStart: opened.start + 1, contentEnd: index });
+    } else if (closes[character]) stack.push({ start: index, close: closes[character] });
+  }
+  return result;
+}
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const speechBefore = /(?:说(?:道)?|问(?:道)?|答(?:道)?|喊(?:道)?|叫(?:道)?|嘟囔|呢喃|低语|自言自语|\b(?:said|asked|replied|whispered|shouted))\s*[:：，,]?\s*$/i;
+const speechAfter = /^[，,。!！?？\s]*(?:[^，,。\n]{0,20})?(?:说(?:道)?|问(?:道)?|答(?:道)?|喊(?:道)?|低语|\b(?:said|asked|replied|whispered|shouted))/i;
+const fullStageLine = /^[\t ]*(?:[（(][^）)\r\n]*[）)]|【[^】\r\n]*】|\[[^\]\r\n]*\])[\t ]*$/;
+
+/** Conservative screenplay parsing, with exact source spans and no model paraphrase. */
+function dialogueSpans(script: string, characterNames: string[]): DialogueSpan[] {
+  const spans: DialogueSpan[] = [];
+  const quotes = quoteRanges(script);
+  const quotesByStart = new Map(quotes.map(quote => [quote.start, quote]));
+  const names = [...new Set([...characterNames, '旁白', '画外音', '独白', 'V.O.', 'O.S.', 'VO', 'OS', 'NARRATOR'])].sort((a, b) => b.length - a.length);
+  const headerPattern = new RegExp(`(^|[。.!！？?；;，,\\n])([\\t \u3000]*)(${names.map(escapeRegExp).join('|')})([\\t \u3000]*(?:[（(][^）)\\r\\n]*[）)])?)[\\t \u3000]*[:：][\\t \u3000]*`, 'gmi');
+  const headers = [...script.matchAll(headerPattern)].map(match => ({
+    start: match.index! + match[1].length + match[2].length,
+    contentStart: match.index! + match[0].length,
+    speaker: names.find(name => name.toLowerCase() === match[3].toLowerCase())!,
+  }));
+  const explicitRanges: { start: number; end: number }[] = [];
+  const addLine = (start: number, end: number, speaker: string) => {
+    const body = script.slice(start, end);
+    if (!body.trim() || fullStageLine.test(body)) return;
+    let contentStart = start + body.length - body.trimStart().length;
+    let contentEnd = start + body.trimEnd().length;
+    // Leading delivery notes and a separate sentence-final stage note are
+    // screenplay instructions. Parentheses inside spoken words remain intact.
+    const leadingStage = script.slice(contentStart, contentEnd).match(/^(?:[（(][^）)\r\n]*[）)][\t ]*)+/);
+    if (leadingStage) contentStart += leadingStage[0].length;
+    const trailingStage = script.slice(contentStart, contentEnd).match(/(?<=[。！？.!?])[\t ]*(?:[（(][^）)\r\n]*[）)][\t ]*)+$/);
+    if (trailingStage) contentEnd -= trailingStage[0].length;
+    if (contentEnd > contentStart) spans.push({ start: contentStart, end: contentEnd, speaker });
+  };
+  for (let index = 0; index < headers.length; index++) {
+    const header = headers[index];
+    const limit = headers[index + 1]?.start ?? script.length;
+    let cursor = header.contentStart;
+    // A quote may begin immediately or on the first line after a speaker-only
+    // header. Do not absorb unindented narrative as unquoted continuation.
+    const quoteStart = cursor + (script.slice(cursor, limit).match(/^[\t \r]*(?:\n[\t ]*)?/)?.[0].length || 0);
+    const candidateQuote = quotesByStart.get(quoteStart);
+    const quote = candidateQuote && candidateQuote.end <= limit ? candidateQuote : undefined;
+    if (quote) {
+      const nextLine = script.indexOf('\n', quote.end);
+      const lineEnd = Math.min(nextLine < 0 ? limit : nextLine, limit);
+      const suffix = script.slice(quote.end, lineEnd).trim();
+      if (!suffix || fullStageLine.test(suffix)) {
+        spans.push({ start: quote.contentStart, end: quote.contentEnd, speaker: header.speaker });
+        explicitRanges.push({ start: header.contentStart, end: lineEnd });
+        continue;
+      }
+    }
+    const firstNewline = script.indexOf('\n', cursor);
+    const firstEnd = Math.min(firstNewline < 0 ? limit : firstNewline, limit);
+    addLine(cursor, firstEnd, header.speaker);
+    cursor = firstEnd;
+    while (cursor < limit && script[cursor] === '\n') {
+      const lineStart = cursor + 1;
+      const newline = script.indexOf('\n', lineStart);
+      const lineEnd = Math.min(newline < 0 ? limit : newline, limit);
+      const line = script.slice(lineStart, lineEnd);
+      if (!line.trim()) break;
+      if (fullStageLine.test(line)) { cursor = lineEnd; continue; }
+      if (!/^[\t \u3000]+\S/.test(line)) break;
+      addLine(lineStart, lineEnd, header.speaker);
+      cursor = lineEnd;
+    }
+    explicitRanges.push({ start: header.contentStart, end: cursor });
+  }
+  for (const quote of quotes) {
+    if (explicitRanges.some(range => quote.start >= range.start && quote.start < range.end)) continue;
+    const before = script.slice(Math.max(0, quote.start - 100), quote.start);
+    const after = script.slice(quote.end, quote.end + 60);
+    const beforeIsSpeech = speechBefore.test(before);
+    const afterIsSpeech = speechAfter.test(after);
+    if (!beforeIsSpeech && !afterIsSpeech) continue;
+    // Only the speaking clause supplies identity, not names in previous events.
+    const clause = beforeIsSpeech ? before.split(/[。！？!?\n.]/).at(-1)! : after.replace(/^[，,。!！?？\s]+/, '').split(/[，,。\n.]/)[0];
+    const present = characterNames.filter(name => clause.includes(name));
+    const speaker = present.length === 1 ? present[0] : '';
+    if (quote.contentEnd > quote.contentStart) spans.push({ start: quote.contentStart, end: quote.contentEnd, speaker });
+  }
+  return spans.sort((left, right) => left.start - right.start);
+}
+interface DialogueContext { spans: DialogueSpan[]; legacySpans: DialogueSpan[] }
+function dialogueContext(script: string, names: string[]): DialogueContext {
+  return { spans: dialogueSpans(script, names), legacySpans: legacyDialogueSpans(script, names) };
+}
+function legacyCanonicalDialogue(script: string, start: number, end: number, spans: DialogueSpan[]): string {
   return spans.filter(span => span.start < end && span.end > start).map(span => {
     const words = script.slice(Math.max(start, span.start), Math.min(end, span.end));
     return `${span.speaker ? `${span.speaker}：` : ''}${words}`;
+  }).join('\n');
+}
+function canonicalDialogue(script: string, start: number, end: number, spans: DialogueSpan[]): string {
+  return spans.filter(span => span.start < end && span.end > start).map(span => {
+    const words = script.slice(Math.max(start, span.start), Math.min(end, span.end));
+    return words.split(/\r?\n/).filter(line => line.trim()).map(line => `${span.speaker ? `${span.speaker}：` : ''}${line}`).join('\n');
   }).join('\n');
 }
 function dialogueWordCount(dialogue: string): number {
@@ -204,7 +311,9 @@ function parseReferences(value: unknown, shot: DirectorShot): DirectorReference[
     return result;
   });
 }
-function validateShot(value: unknown, index: number, script: string, info: DirectorUnderstanding, chunks: DirectorChunk[]): DirectorShot {
+const dialogueMigrationWarning = '对白提取规则已更新，已按源剧本修正；旧提示词已失效，请复核后重新生成。';
+const dialogueOverloadWarning = '补全后的原文对白超出当前片段时长，需要拆镜后生成，不能删词或强行加速。';
+function validateShot(value: unknown, index: number, script: string, info: DirectorUnderstanding, chunks: DirectorChunk[], context: DialogueContext, migrateLegacy = false): DirectorShot {
   const data = record(value, '分镜');
   const sourceStart = integer(data.sourceStart, '原文起点', 0, script.length - 1);
   const sourceEnd = integer(data.sourceEnd, '原文终点', sourceStart + 1, script.length);
@@ -220,37 +329,78 @@ function validateShot(value: unknown, index: number, script: string, info: Direc
   if (!info.scenes.some(item => item.name === scene)) invalid('分镜出现全局资产中未定义的场景。');
   const charactersInvolved = strings(data.charactersInvolved, '出场角色');
   if (new Set(charactersInvolved).size !== charactersInvolved.length || charactersInvolved.some(name => !info.characters.some(item => item.name === name))) invalid('分镜出现重复或未定义的角色。');
-  const dialogue = string(data.dialogue, '对白', true);
-  if (dialogue !== canonicalDialogue(script, sourceStart, sourceEnd, dialogueSpans(script, info.characters.map(item => item.name)))) invalid('分镜对白与原文不一致；修改对白请先修改源剧本。');
+  const suppliedDialogue = string(data.dialogue, '对白', true);
+  const dialogue = canonicalDialogue(script, sourceStart, sourceEnd, context.spans);
+  const migrated = suppliedDialogue !== dialogue && migrateLegacy && suppliedDialogue === legacyCanonicalDialogue(script, sourceStart, sourceEnd, context.legacySpans);
+  if (suppliedDialogue !== dialogue && !migrated) invalid('分镜对白与原文不一致；修改对白请先修改源剧本。');
   const durationSeconds = integer(data.durationSeconds, '片段时长', 4, 30);
-  if (dialogueWordCount(dialogue) > (durationSeconds - 1) * 4) invalid('对白在当前时长内过密，请继续拆镜并逐字保留，不可删词或强行加速。');
+  const qaWarnings = strings(data.qaWarnings, '复核提示');
+  const suppliedPrompt = string(data.masterPrompt, '提示词正文', true);
+  if (dialogueWordCount(dialogue) > (durationSeconds - 1) * 4) {
+    if (!migrated && !(migrateLegacy && !suppliedPrompt && qaWarnings.includes(dialogueOverloadWarning))) invalid('对白在当前时长内过密，请继续拆镜并逐字保留，不可删词或强行加速。');
+    qaWarnings.push(dialogueOverloadWarning);
+  }
+  if (migrated) qaWarnings.push(dialogueMigrationWarning);
   const shot: DirectorShot = { id: string(data.id, '镜头ID'), shotNumber: integer(data.shotNumber, '镜号', index + 1, index + 1),
     scene, charactersInvolved, sourceExcerpt, sourceStart, sourceEnd, sourceChunkId,
     action: string(data.action, '动作'), camera: string(data.camera, '摄影机'), dialogue, durationSeconds,
-    continuity: string(data.continuity, '连续性交接'), referencePlan: [], masterPrompt: string(data.masterPrompt, '提示词正文', true),
-    postProductionNotes: strings(data.postProductionNotes, '后期建议'), qaWarnings: strings(data.qaWarnings, '复核提示') };
+    continuity: string(data.continuity, '连续性交接'), referencePlan: [], masterPrompt: migrated ? '' : suppliedPrompt,
+    postProductionNotes: strings(data.postProductionNotes, '后期建议'), qaWarnings: [...new Set(qaWarnings)] };
+  if (migrated) shot.postProductionNotes = [];
   shot.referencePlan = parseReferences(data.referencePlan, shot);
   if (shot.masterPrompt) validatePrompt(shot.masterPrompt, shot);
   return shot;
 }
 function validatePrompt(prompt: string, shot: DirectorShot): void {
-  let nonDialogue = prompt;
-  for (const line of shot.dialogue.split('\n').filter(Boolean)) nonDialogue = nonDialogue.replaceAll(line.replace(/^[^：\n]{1,30}：/, ''), '（原文对白）');
-  if (/@\s*(?:图片|图像|视频|音频|image|video|audio)?\s*\d/i.test(nonDialogue) || /(?:已上传|上传完成|已绑定)/.test(nonDialogue)) invalid('提示词不能编造参考素材编号或完成状态。');
-  const warnings = checkPromptTimeline(prompt, String(shot.durationSeconds));
-  if (warnings.length) invalid(`提示词时间轴无效：${warnings.join(' ')}`);
+  if (dialogueWordCount(shot.dialogue) > (shot.durationSeconds - 1) * 4) invalid(dialogueOverloadWarning);
+  const required = new Map<string, number>();
   for (const line of shot.dialogue.split('\n').filter(Boolean)) {
-    const spokenWords = line.replace(/^[^：\n]{1,30}：/, '');
-    if (!prompt.includes(spokenWords)) invalid('提示词遗漏或改写了原文对白，请逐字修复。');
+    const words = line.replace(/^[^：\n]{1,30}：/, '');
+    required.set(words, (required.get(words) || 0) + 1);
   }
-  // Any direct quoted speech in the copyable prompt must come from this shot.
-  // Use parentheses for visual labels instead of quoting invented speech.
-  for (const match of prompt.matchAll(/“([^”]+)”|「([^」]+)」/g)) {
-    const quoted = match[1] ?? match[2];
-    if (shot.dialogue.includes(quoted)) continue;
-    const before = prompt.slice(Math.max(0, match.index! - 35), match.index!);
-    if (!shot.sourceExcerpt.includes(quoted) || /(?:对白|台词|说(?:道)?|问(?:道)?|答(?:道)?|喊(?:道)?)\s*[:：，,]?\s*$/.test(before)) invalid('提示词出现原文没有的引号对白，不能新增台词。');
+  const speakers = [...shot.charactersInvolved, '旁白', '画外音', '独白', 'VO', 'OS', 'NARRATOR'];
+  const speakerPrefix = new RegExp(`(?:${speakers.map(escapeRegExp).join('|')})[\\t ]*(?:[（(][^）)\\r\\n]*[）)])?[\\t ]*[:：][\\t ]*$`, 'i');
+  const copies: { start: number; end: number }[] = [];
+  for (const quote of quoteRanges(prompt)) {
+    const words = prompt.slice(quote.contentStart, quote.contentEnd);
+    const before = prompt.slice(Math.max(0, quote.start - 80), quote.start);
+    const after = prompt.slice(quote.end, quote.end + 50);
+    const spoken = speechBefore.test(before) || speechAfter.test(after) || /(?:对白|台词)\s*[:：]\s*$/.test(before) || speakerPrefix.test(before);
+    // Quoted visual terms (e.g. style “克制的压迫感”) are not asserted speech.
+    if (spoken && !shot.dialogue.includes(words) && !shot.dialogue.replace(/^[^：\n]{1,30}：/gm, '').includes(words)) invalid('提示词出现原文没有的引号对白，不能新增台词。');
+    if (spoken || required.has(words)) copies.push({ start: quote.contentStart, end: quote.contentEnd });
   }
+  for (const line of shot.dialogue.split('\n').filter(Boolean)) {
+    const words = line.replace(/^[^：\n]{1,30}：/, '');
+    const forms = line !== words ? [line] : [`对白：${words}`, `对白:${words}`, `台词：${words}`, `台词:${words}`];
+    for (const form of forms) {
+      let from = 0;
+      while (from < prompt.length) {
+        const start = prompt.indexOf(form, from);
+        if (start < 0) break;
+        copies.push({ start: start + form.length - words.length, end: start + form.length });
+        from = start + form.length;
+      }
+    }
+  }
+  // Count only explicit speech copies, never coincidental digits in timestamps.
+  const uniqueCopies: { start: number; end: number }[] = [];
+  for (const copy of copies.sort((a, b) => (b.end - b.start) - (a.end - a.start))) {
+    if (!uniqueCopies.some(other => copy.start >= other.start && copy.end <= other.end)) uniqueCopies.push(copy);
+  }
+  let spokenText = uniqueCopies.map(copy => prompt.slice(copy.start, copy.end)).join('\n');
+  let missingDialogue = false;
+  for (const [words, count] of [...required].sort(([a], [b]) => b.length - a.length)) {
+    if (spokenText.split(words).length - 1 < count) missingDialogue = true;
+    spokenText = spokenText.replaceAll(words, '（原文对白）');
+  }
+  let nonDialogue = prompt;
+  for (const copy of uniqueCopies.sort((a, b) => b.start - a.start)) nonDialogue = nonDialogue.slice(0, copy.start) + '（原文对白）' + nonDialogue.slice(copy.end);
+  if (/@\s*(?:图片|图像|视频|音频|image|video|audio)?\s*\d/i.test(nonDialogue) || /(?:已上传|上传完成|已绑定)/.test(nonDialogue)) invalid('提示词不能编造参考素材编号或完成状态。');
+  const warnings = checkPromptTimeline(nonDialogue, String(shot.durationSeconds));
+  if (warnings.length) invalid(`提示词时间轴无效：${warnings.join(' ')}`);
+  if (missingDialogue) invalid('提示词遗漏或改写了原文对白，或对白出现次数不足，请逐字修复。');
+  if ([...required].some(([words]) => !words.trim())) invalid('原文对白为空白，请对照源剧本复核。');
 }
 function validateCoverage(shots: DirectorShot[], script: string, expectedEnd: number): void {
   let cursor = 0;
@@ -270,7 +420,8 @@ export function validateDirectorProject(value: unknown): DirectorProject {
   const settings = validateDirectorSettings(data.settings);
   const info = understanding(data.understanding, sourceScript);
   const chunks = chunkDirectorScript(sourceScript);
-  const shots = array(data.shots, '分镜').map((item, index) => validateShot(item, index, sourceScript, info, chunks));
+  const context = dialogueContext(sourceScript, info.characters.map(item => item.name));
+  const shots = array(data.shots, '分镜').map((item, index) => validateShot(item, index, sourceScript, info, chunks, context, true));
   if (!shots.length) invalid('导演项目没有分镜。');
   validateCoverage(shots, sourceScript, sourceScript.length);
   return { version: 1, sourceScript, settings, understanding: info, shots };
@@ -295,14 +446,17 @@ export function validateDirectorCheckpoint(value: unknown): DirectorCheckpoint {
   if (info && analyses.length !== chunks.length) invalid('恢复记录在逐块分析完成前含有全局理解。');
   const rawShots = array(data.shots, '恢复分镜');
   if (rawShots.length && !info) invalid('恢复记录缺少生成分镜所需的全局理解。');
-  const shots = info ? rawShots.map((item, index) => validateShot(item, index, sourceScript, info, chunks)) : [];
+  const context = info ? dialogueContext(sourceScript, info.characters.map(item => item.name)) : undefined;
+  const shots = info ? rawShots.map((item, index) => validateShot(item, index, sourceScript, info, chunks, context!, true)) : [];
   const coveredEnd = shots.at(-1)?.sourceEnd || 0;
   if (coveredEnd && !chunks.some(chunk => chunk.end === coveredEnd)) invalid('恢复记录含有未完整提交的分镜批次。');
   validateCoverage(shots, sourceScript, coveredEnd);
-  const completedPromptShotIds = strings(data.completedPromptShotIds, '已完成提示词');
-  if (new Set(completedPromptShotIds).size !== completedPromptShotIds.length || completedPromptShotIds.some(id => !shots.some(shot => shot.id === id && shot.masterPrompt))) invalid('恢复记录已完成提示词ID无效。');
-  if (shots.some(shot => Boolean(shot.masterPrompt) !== completedPromptShotIds.includes(shot.id))) invalid('恢复记录提示词完成状态不一致。');
-  if (completedPromptShotIds.length && coveredEnd !== sourceScript.length) invalid('恢复记录在全剧分镜完成前生成提示词。');
+  const storedCompletedIds = strings(data.completedPromptShotIds, '已完成提示词');
+  const storedShotRecords = rawShots.map(item => record(item, '恢复分镜'));
+  if (new Set(storedCompletedIds).size !== storedCompletedIds.length || storedCompletedIds.some(id => !storedShotRecords.some(shot => shot.id === id && shot.masterPrompt))) invalid('恢复记录已完成提示词ID无效。');
+  if (storedShotRecords.some(shot => Boolean(shot.masterPrompt) !== storedCompletedIds.includes(String(shot.id)))) invalid('恢复记录提示词完成状态不一致。');
+  if (storedCompletedIds.length && coveredEnd !== sourceScript.length) invalid('恢复记录在全剧分镜完成前生成提示词。');
+  const completedPromptShotIds = storedCompletedIds.filter(id => shots.some(shot => shot.id === id && shot.masterPrompt));
   return { version: 1, sourceScript, settings, chunks, analyses, ...(info ? { understanding: info } : {}), shots, completedPromptShotIds };
 }
 
@@ -362,7 +516,8 @@ function shotContext(shot: DirectorShot) {
 function parseStoryboard(data: Record<string, unknown>, state: DirectorCheckpoint, chunk: DirectorChunk): DirectorShot[] {
   const entries = array(data.shots, '分镜');
   if (!entries.length) invalid('当前原文块没有分镜，不能跳过。');
-  const spans = dialogueSpans(state.sourceScript, state.understanding!.characters.map(item => item.name));
+  const context = dialogueContext(state.sourceScript, state.understanding!.characters.map(item => item.name));
+  const spans = context.spans;
   let cursor = 0;
   const result = entries.map((item, index) => {
     const entry = record(item, '分镜');
@@ -379,7 +534,7 @@ function parseStoryboard(data: Record<string, unknown>, state: DirectorCheckpoin
     const shot = { ...entry, id: `shot-${shotNumber}`, shotNumber, sourceStart, sourceEnd,
       sourceChunkId: chunk.id, sourceExcerpt: state.sourceScript.slice(sourceStart, sourceEnd), dialogue,
       referencePlan: [], masterPrompt: '', postProductionNotes: [], qaWarnings: [] };
-    return validateShot(shot, shotNumber - 1, state.sourceScript, state.understanding!, state.chunks);
+    return validateShot(shot, shotNumber - 1, state.sourceScript, state.understanding!, state.chunks, context);
   });
   if (chunk.text.slice(cursor).trim()) invalid('当前块的尾部原文没有分镜，不能丢失长剧本后段。');
   const last = result.at(-1)!;
@@ -414,7 +569,8 @@ function parsePromptBatch(data: Record<string, unknown>, shots: DirectorShot[]):
     const qaWarnings = strings(entry.qaWarnings, '复核提示');
     if (shot.dialogue && !shot.dialogue.split('\n').every(line => shot.charactersInvolved.some(name => line.startsWith(`${name}：`)))) qaWarnings.push('部分对白的说话人尚未匹配出场资产，请对照原文人工复核。');
     const localSpans = dialogueSpans(shot.sourceExcerpt, shot.charactersInvolved);
-    if ([...shot.sourceExcerpt.matchAll(/“([^”]+)”|「([^」]+)」/g)].some(match => !localSpans.some(span => match.index! + 1 >= span.start && match.index! + 1 < span.end))) qaWarnings.push('原文含未确认为对白的引号内容；标牌、称呼等作为画面内容保留，请复核实际说话语境。');
+    if (quoteRanges(shot.sourceExcerpt).some(quote => !localSpans.some(span => quote.contentStart >= span.start && quote.contentStart < span.end))) qaWarnings.push('原文含未确认为对白的引号内容；标牌、称呼等作为画面内容保留，请复核实际说话语境。');
+    if (/^[\t ]*[（(][^）)\r\n]*[）)][\t ]*$/m.test(shot.sourceExcerpt) || new RegExp(`(?:${[...shot.charactersInvolved, '旁白', '画外音'].map(escapeRegExp).join('|')})[\\t \u3000]*[（(][^）)\\r\\n]*[）)][\\t \u3000]*[:：]`).test(shot.sourceExcerpt)) qaWarnings.push('角色名旁或独立括号行按表演说明处理；请复核括号内文字是否需要说出口。');
     qaWarnings.push('提示词已作文字校验，人物、口型、动作与运镜仍须以实际生成视频验收。');
     return { ...shot, masterPrompt, postProductionNotes, referencePlan, qaWarnings: [...new Set(qaWarnings)] };
   });
@@ -470,6 +626,7 @@ export async function runAutoDirector(options: RunAutoDirectorOptions): Promise<
   let remaining = state.shots.filter(shot => !state.completedPromptShotIds.includes(shot.id));
   while (remaining.length) {
     const batch = remaining.slice(0, PROMPT_BATCH_SIZE);
+    if (batch.some(shot => dialogueWordCount(shot.dialogue) > (shot.durationSeconds - 1) * 4)) invalid(dialogueOverloadWarning);
     progress('prompts', state.completedPromptShotIds.length, state.shots.length, `编写提示词 ${batch[0].shotNumber}–${batch.at(-1)!.shotNumber}/${state.shots.length}`);
     const generated = await request(options.generate, promptBatch({ shots: state.shots, understanding: state.understanding!, settings }, batch), data => parsePromptBatch(data, batch), options.signal);
     abort(options.signal);
@@ -490,6 +647,7 @@ export async function regenerateDirectorShot(project: DirectorProject, shotId: s
   const validated = validateDirectorProject(project);
   const shot = validated.shots.find(item => item.id === shotId);
   if (!shot) invalid('找不到要重新生成的镜头。');
+  if (dialogueWordCount(shot.dialogue) > (shot.durationSeconds - 1) * 4) invalid(dialogueOverloadWarning);
   abort(signal);
   const fresh = await request(generate, promptBatch(validated, [shot]), data => parsePromptBatch(data, [shot]), signal);
   abort(signal);

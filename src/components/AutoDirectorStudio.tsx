@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertCircle, ArrowRight, BookOpen, Check, Clapperboard, Copy, Download, FileText, Pause, RotateCcw, Settings2, Upload, X } from 'lucide-react';
+import { AlertCircle, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Clapperboard, Copy, Download, FileText, Pause, RotateCcw, Search, Settings2, Upload, X } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { readScriptFile } from '../lib/scriptFiles';
+import { readScriptFileWithInfo } from '../lib/scriptFiles';
+import { commitDirectorShotEdit, createDirectorShotEdit, readDirectorShotEdit, rebaseDirectorShotEdit, type DirectorShotDraft, type DirectorShotEdit } from '../lib/directorEditing';
 import {
   runAutoDirector, regenerateDirectorShot, validateDirectorProject, validateDirectorCheckpoint, validateDirectorSettings, exportDirectorMarkdown,
   type DirectorProject, type DirectorCheckpoint, type DirectorSettings, type DirectorProgress, type DirectorShot,
@@ -127,6 +128,7 @@ export interface AutoDirectorStudioProps {
   settings: DirectorSettings;
   onSettingsChange: (settings: DirectorSettings) => void;
   generate: Generate;
+  onActivityChange?: (state: { busy: boolean; hasUnsavedChanges: boolean }) => void;
 }
 
 type DirectorSnapshot = Pick<AutoDirectorStudioProps, 'script' | 'settings' | 'project' | 'checkpoint'>;
@@ -152,10 +154,7 @@ const steps = [
   { id: 'prompts', label: '编写逐镜提示词' },
 ];
 
-type ShotDraft = { action: string; camera: string; continuity: string; durationSeconds: string };
-const shotDraft = (shot: DirectorShot): ShotDraft => ({ action: shot.action, camera: shot.camera, continuity: shot.continuity, durationSeconds: String(shot.durationSeconds) });
-const shotFingerprint = (shot: DirectorShot) => JSON.stringify([shot.sourceExcerpt, shot.action, shot.camera, shot.continuity, shot.durationSeconds]);
-const isDirty = (draft: ShotDraft, shot: DirectorShot) => draft.action !== shot.action || draft.camera !== shot.camera || draft.continuity !== shot.continuity || draft.durationSeconds !== String(shot.durationSeconds);
+const SHOTS_PER_PAGE = 12;
 
 function sameSettings(first: DirectorSettings, second: DirectorSettings) {
   return (['platform', 'visualStyle', 'aspectRatio', 'rhythm', 'lighting', 'sound'] as const)
@@ -207,18 +206,20 @@ function SettingsForm({ settings, onChange, disabled }: { settings: DirectorSett
   );
 }
 
-function ShotRow({ shot, draft, initialOpen, disabled, working, stopping, dirty, canRegenerate, canCancel, error, onStop, onEdit, onSave, onCancel, onRegenerate, onStatus }: {
+function ShotRow({ shot, draft, initialOpen, focusToken, disabled, working, stopping, dirty, conflict, originChanged, canRegenerate, canCancel, error, onStop, onEdit, onSave, onCancel, onRebase, onRegenerate, onStatus }: {
   shot: DirectorShot; initialOpen: boolean; disabled: boolean; working: boolean;
-  draft: ShotDraft; dirty: boolean; canRegenerate: boolean; canCancel: boolean;
+  draft: DirectorShotDraft; dirty: boolean; conflict: boolean; originChanged: boolean; canRegenerate: boolean; canCancel: boolean; focusToken: number;
   stopping: boolean; error?: string; onStop: () => void;
-  onEdit: (shotId: string, field: keyof ShotDraft, value: string) => void;
+  onEdit: (shotId: string, field: keyof DirectorShotDraft, value: string) => void;
   onSave: (shotId: string) => void; onCancel: (shotId: string) => void;
+  onRebase: (shotId: string) => void;
   onRegenerate: (shotId: string) => void;
   onStatus: (message: string) => void;
 }) {
   const [expanded, setExpanded] = useState(initialOpen);
+  useEffect(() => { if (focusToken) setExpanded(true); }, [focusToken]);
   return (
-    <details open={expanded} onToggle={event => setExpanded(event.currentTarget.open)} className="border-b border-white/10 py-4">
+    <details id={'director-shot-' + shot.id} open={expanded} onToggle={event => setExpanded(event.currentTarget.open)} className="scroll-mt-5 border-b border-white/10 py-4">
       <summary className="cursor-pointer rounded-lg text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">
         <span className="ml-1 inline-flex max-w-full flex-wrap items-center gap-x-3 gap-y-2 align-middle">
           <span className="font-mono text-sm tabular-nums text-zinc-500">{String(shot.shotNumber).padStart(2, '0')}</span>
@@ -247,10 +248,11 @@ function ShotRow({ shot, draft, initialOpen, disabled, working, stopping, dirty,
           </div>
         </div>
         {dirty && <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3">
-          <p className="flex-1 text-pretty text-xs leading-6 text-amber-100">修改尚未保存。保存后，本镜与必要的相邻镜承接提示词会标记为待更新。</p>
-          <button type="button" disabled={disabled} className={secondaryButtonClass} onClick={() => onSave(shot.id)}><Check className="size-4" aria-hidden="true" />保存修改</button>
+          <p className="flex-1 text-pretty text-xs leading-6 text-amber-100">{conflict ? originChanged ? '这镜对应的原文已变化。本地修改仍保留，请复制需要的文字后取消修改，重新核对原文。' : '已保存的分镜发生变化。本地修改仍保留；核对后可基于最新内容保留你改过的字段，或取消修改。' : '修改尚未保存。保存后，本镜与必要的相邻镜承接提示词会标记为待更新。'}</p>
+          {conflict && !originChanged ? <button type="button" disabled={disabled} className={secondaryButtonClass} onClick={() => onRebase(shot.id)}>保留我改过的字段</button> : <button type="button" disabled={disabled || conflict} className={secondaryButtonClass} onClick={() => onSave(shot.id)}><Check className="size-4" aria-hidden="true" />保存修改</button>}
           <button type="button" disabled={!canCancel} className={secondaryButtonClass} onClick={() => onCancel(shot.id)}>取消修改</button>
         </div>}
+        {conflict && <details><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">核对当前已保存的分镜</summary><dl className="grid gap-3 border-l border-white/15 pl-3 text-sm leading-7"><div><dt className="text-zinc-500">画面动作</dt><dd className="whitespace-pre-wrap text-zinc-300">{shot.action}</dd></div><div><dt className="text-zinc-500">镜头观察与运镜</dt><dd className="whitespace-pre-wrap text-zinc-300">{shot.camera}</dd></div><div><dt className="text-zinc-500">承接与结束状态</dt><dd className="whitespace-pre-wrap text-zinc-300">{shot.continuity}</dd></div><div><dt className="text-zinc-500">片段时长</dt><dd className="tabular-nums text-zinc-300">{shot.durationSeconds} 秒</dd></div></dl></details>}
         {error && <p role="alert" className="rounded-xl border border-red-400/25 bg-red-400/5 p-3 text-pretty text-sm leading-7 text-red-200">{error}</p>}
         <details className="text-sm">
           <summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-zinc-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">对照原文</summary>
@@ -269,7 +271,7 @@ function ShotRow({ shot, draft, initialOpen, disabled, working, stopping, dirty,
         {shot.masterPrompt ? (
           <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-white/10 bg-zinc-950 px-4 py-4 font-sans text-sm leading-8 text-zinc-300">{shot.masterPrompt}</pre>
         ) : (
-          <p className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-4 text-sm leading-7 text-amber-100">分镜修改后，旧提示词已停用。点击「生成这一镜提示词」即可按最新内容重做。</p>
+          <p className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-4 text-sm leading-7 text-amber-100">{canRegenerate ? '这一镜的提示词需要更新。点击「生成这一镜提示词」，按最新分镜重新编写。' : '这一镜的提示词尚未就绪。请先保存修改或继续完成制作；旧项目需先恢复对应的原文与设置。'}</p>
         )}
         {!!shot.referencePlan.length && (
           <details className="text-sm">
@@ -287,6 +289,17 @@ function ShotRow({ shot, draft, initialOpen, disabled, working, stopping, dirty,
   );
 }
 
+function ShotPagination({ page, pages, onChange }: { page: number; pages: number; onChange: (page: number) => void }) {
+  if (pages <= 1) return null;
+  return <nav aria-label="分镜翻页" className="flex flex-wrap items-center justify-between gap-3 py-4">
+    <p className="text-xs tabular-nums text-zinc-500">第 {page} / {pages} 页 · 每页 {SHOTS_PER_PAGE} 镜</p>
+    <div className="flex gap-2">
+      <button type="button" className={secondaryButtonClass} disabled={page <= 1} onClick={() => onChange(page - 1)}><ChevronLeft className="size-4" aria-hidden="true" />上一页</button>
+      <button type="button" className={secondaryButtonClass} disabled={page >= pages} onClick={() => onChange(page + 1)}>下一页<ChevronRight className="size-4" aria-hidden="true" /></button>
+    </div>
+  </nav>;
+}
+
 export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
   const { script, onScriptChange, project, onProjectChange, checkpoint, onCheckpointChange, settings, onSettingsChange, generate } = props;
   const [pending, setPending] = useState<{ kind: 'project' | 'shot'; shotId?: string } | null>(null);
@@ -295,8 +308,14 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [scriptWarning, setScriptWarning] = useState('');
   const [shotError, setShotError] = useState<{ shotId: string; message: string } | null>(null);
-  const [shotDrafts, setShotDrafts] = useState<Record<string, { source: string; values: ShotDraft }>>({});
+  const [shotDrafts, setShotDrafts] = useState<Record<string, DirectorShotEdit>>({});
+  const [shotQuery, setShotQuery] = useState('');
+  const [shotFilter, setShotFilter] = useState<'all' | 'pending' | 'edited'>('all');
+  const [shotPage, setShotPage] = useState(1);
+  const [focusRequest, setFocusRequest] = useState<{ id: string; token: number } | null>(null);
+  const [inputRestoreSnapshot, setInputRestoreSnapshot] = useState<Pick<DirectorSnapshot, 'script' | 'settings'> | null>(null);
   const [importedSnapshot, setImportedSnapshot] = useState<DirectorSnapshot | null>(null);
   const [restoreSnapshot, setRestoreSnapshot] = useState<DirectorSnapshot | null>(null);
   const restoreInput = useRef<HTMLInputElement>(null);
@@ -312,13 +331,27 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
   const displayProject = project || (checkpoint?.understanding ? { version: 1 as const, sourceScript: checkpoint.sourceScript, settings: checkpoint.settings, understanding: checkpoint.understanding, shots: checkpoint.shots } : null);
   const readyPrompts = displayProject?.shots.filter(shot => !!shot.masterPrompt.trim()).length || 0;
   const canEdit = !!project && !busy && !sourceChanged;
-  const getShotDraft = (shot: DirectorShot): ShotDraft => shotDrafts[shot.id]?.source === shotFingerprint(shot) ? shotDrafts[shot.id].values : shotDraft(shot);
-  const hasUnsavedChanges = !!project?.shots.some(shot => isDirty(getShotDraft(shot), shot));
+  const getShotEdit = (shot: DirectorShot) => readDirectorShotEdit(shot, shotDrafts[shot.id]);
+  const detachedEdits = Object.entries(shotDrafts).filter(([id, edit]) => !displayProject?.shots.some(shot => shot.id === id) && (['action', 'camera', 'continuity', 'durationSeconds'] as const).some(key => edit.values[key] !== edit.base[key]));
+  const hasUnsavedChanges = !!displayProject?.shots.some(shot => getShotEdit(shot).dirty) || detachedEdits.length > 0;
+  const shotsToUpdate = displayProject?.shots.filter(shot => !shot.masterPrompt.trim() || getShotEdit(shot).dirty).length || 0;
+  const search = shotQuery.trim().toLocaleLowerCase();
+  const filteredShots = (displayProject?.shots || []).filter(shot => {
+    const local = getShotEdit(shot);
+    if (shotFilter === 'pending' && shot.masterPrompt.trim() && !local.dirty) return false;
+    if (shotFilter === 'edited' && !local.dirty) return false;
+    return !search || [String(shot.shotNumber), shot.scene, ...shot.charactersInvolved, local.values.action, shot.dialogue, shot.sourceExcerpt].some(value => value.toLocaleLowerCase().includes(search));
+  });
+  const pageCount = Math.max(1, Math.ceil(filteredShots.length / SHOTS_PER_PAGE));
+  const currentPage = Math.min(shotPage, pageCount);
+  const visibleShots = filteredShots.slice((currentPage - 1) * SHOTS_PER_PAGE, currentPage * SHOTS_PER_PAGE);
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; sequence.current += 1; operation.current?.abort(); };
+    return () => { mounted.current = false; sequence.current += 1; operation.current?.abort(); latest.current.onActivityChange?.({ busy: false, hasUnsavedChanges: false }); };
   }, []);
+
+  useEffect(() => { props.onActivityChange?.({ busy, hasUnsavedChanges }); }, [busy, hasUnsavedChanges, props.onActivityChange]);
 
   useEffect(() => {
     if (!hasUnsavedChanges) return;
@@ -330,13 +363,23 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
     return () => window.removeEventListener('beforeunload', warnBeforeLeaving);
   }, [hasUnsavedChanges]);
 
+  useEffect(() => {
+    if (!focusRequest) return;
+    const frame = requestAnimationFrame(() => {
+      const shot = document.getElementById('director-shot-' + focusRequest.id);
+      shot?.querySelector('summary')?.focus({ preventScroll: true });
+      shot?.scrollIntoView({ block: 'start' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequest]);
+
   const importScript = async (file: File) => {
     if (operation.current || readingRef.current || hasUnsavedChanges) return;
     readingRef.current = true;
     setReading(true); setError(''); setNotice('');
     try {
-      const content = await readScriptFile(file);
-      if (mounted.current) { latest.current.onScriptChange(content); setNotice('剧本已导入。点击主按钮开始制作。'); }
+      const imported = await readScriptFileWithInfo(file);
+      if (mounted.current) { latest.current.onScriptChange(imported.text); setScriptWarning(imported.warning || ''); setNotice(imported.warning ? '剧本已导入，请先核对原文中的中文、标点与对白。' : '剧本已导入。点击主按钮开始制作。'); }
     } catch (error) { if (mounted.current) setError(messageFrom(error, '剧本读取失败，请检查文件。')); }
     finally { readingRef.current = false; if (mounted.current) setReading(false); }
   };
@@ -344,6 +387,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
   const run = async (resume: boolean) => {
     if (operation.current || readingRef.current) return;
     if (hasUnsavedChanges) { setError('请先保存或取消分镜修改，再开始制作。'); return; }
+    if (resume && !canResume) { setError('这份中断进度与当前原文或设置不同，未继续制作。'); return; }
     if (!script.trim()) { setError('先粘贴或导入一份剧本。'); return; }
     if (script.length > MAX_SCRIPT_LENGTH) { setError('剧本超过 30,000 字，请按章节拆分后制作。'); return; }
     const controller = new AbortController();
@@ -362,6 +406,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
       if (latest.current.script !== script || !sameSettings(latest.current.settings, settings)) throw new Error('原文或创作设置已经改变，本次结果没有替换当前项目。');
       latest.current.onProjectChange(result);
       latest.current.onCheckpointChange(null);
+      setShotDrafts({}); setShotQuery(''); setShotFilter('all'); setShotPage(1); setFocusRequest(null);
       setNotice('创作草案已完成。可以修改分镜、复制提示词，或导出整份项目。');
     } catch (error) {
       if (mounted.current && sequence.current === runNumber) {
@@ -373,11 +418,18 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
     }
   };
 
-  const editShot = (shotId: string, field: keyof ShotDraft, value: string) => {
+  const editShot = (shotId: string, field: keyof DirectorShotDraft, value: string) => {
     if (!project || operation.current || readingRef.current || sourceChanged) return;
     const shot = project.shots.find(item => item.id === shotId);
     if (!shot) return;
-    setShotDrafts(current => ({ ...current, [shotId]: { source: shotFingerprint(shot), values: { ...getShotDraft(shot), [field]: value } } }));
+    setShotDrafts(current => {
+      const edit = current[shotId] || createDirectorShotEdit(shot);
+      const next = { ...edit, values: { ...edit.values, [field]: value } };
+      const drafts = { ...current };
+      if (!readDirectorShotEdit(shot, next).dirty) delete drafts[shotId];
+      else drafts[shotId] = next;
+      return drafts;
+    });
     if (shotError?.shotId === shotId) setShotError(null);
   };
 
@@ -389,23 +441,27 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
 
   const saveShotEdit = (shotId: string) => {
     if (!project || operation.current || readingRef.current || sourceChanged) return;
-    const index = project.shots.findIndex(shot => shot.id === shotId);
-    const original = project.shots[index];
-    if (!original) return;
-    const draft = getShotDraft(original);
+    const edit = shotDrafts[shotId];
+    if (!edit) return;
     try {
-      const values = { action: draft.action.trim(), camera: draft.camera.trim(), continuity: draft.continuity.trim(), durationSeconds: Number(draft.durationSeconds) };
-      const affectsNeighbors = values.action !== original.action || values.camera !== original.camera || values.continuity !== original.continuity;
-      const candidate = { ...project, shots: project.shots.map((shot, shotIndex) => {
-        if (shotIndex !== index && (!affectsNeighbors || Math.abs(shotIndex - index) !== 1)) return shot;
-        return { ...shot, ...(shotIndex === index ? values : {}), masterPrompt: '', postProductionNotes: [], referencePlan: [],
-          qaWarnings: [shotIndex === index ? '分镜已修改，提示词待重新生成。' : '相邻镜的承接内容已调整，提示词待重新生成。'] };
-      }) };
-      const validated = validateDirectorProject(candidate);
-      onProjectChange(validated);
+      const result = commitDirectorShotEdit(project, shotId, edit);
+      onProjectChange(result.project);
+      if (result.clearCheckpoint) { onCheckpointChange(null); setProgress(null); }
       cancelShotEdit(shotId);
-      setNotice(affectsNeighbors ? '分镜修改已保存。本镜及相邻镜的承接提示词需要更新。' : '时长修改已保存，请重新生成这一镜的提示词。');
+      setNotice(!result.invalidatedShotIds.length ? '分镜已保存，内容未变化，提示词仍可使用。' : result.affectsNeighbors ? '分镜修改已保存。本镜及相邻镜的承接提示词需要更新；旧制作进度已移除，避免覆盖修改。' : '时长修改已保存，请重新生成这一镜的提示词。旧制作进度已移除。');
     } catch (error) { setShotError({ shotId, message: messageFrom(error, '修改未保存，请检查动作、运镜、承接和时长。') }); }
+  };
+
+  const rebaseShotEdit = (shotId: string) => {
+    if (!project || busy || sourceChanged) return;
+    const shot = project.shots.find(item => item.id === shotId);
+    const edit = shotDrafts[shotId];
+    if (!shot || !edit) return;
+    try {
+      const rebased = rebaseDirectorShotEdit(shot, edit);
+      setShotDrafts(current => ({ ...current, [shotId]: rebased }));
+      setShotError(null); setNotice('已基于最新分镜保留你改过的字段，请再次核对并保存修改。');
+    } catch (error) { setShotError({ shotId, message: messageFrom(error, '本地修改仍保留，请核对分镜。') }); }
   };
 
   const regenerate = async (shotId: string) => {
@@ -422,6 +478,8 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
       if (!mounted.current || sequence.current !== runNumber) return;
       if (latest.current.project !== source) throw new Error('分镜已经更新，这次结果没有覆盖当前内容，请重试。');
       latest.current.onProjectChange(result);
+      latest.current.onCheckpointChange(null);
+      setProgress(null);
       setNotice('这一镜的提示词已更新。相邻镜如标记待更新，可继续逐镜重做。');
     } catch (error) {
       if (mounted.current && sequence.current === runNumber) {
@@ -445,12 +503,20 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
   };
 
   const applyRestore = () => {
-    if (!importedSnapshot || busy) return;
+    if (!importedSnapshot || busy || hasUnsavedChanges) return;
     setRestoreSnapshot({ script, settings, project, checkpoint });
     onScriptChange(importedSnapshot.script); onSettingsChange(importedSnapshot.settings);
     onProjectChange(importedSnapshot.project); onCheckpointChange(importedSnapshot.checkpoint);
-    setImportedSnapshot(null); setProgress(null); setError(''); setShotError(null); setShotDrafts({});
+    setImportedSnapshot(null); setProgress(null); setError(''); setShotError(null); setShotDrafts({}); setInputRestoreSnapshot(null); setScriptWarning('');
+    setShotQuery(''); setShotFilter('all'); setShotPage(1); setFocusRequest(null);
     setNotice('项目已恢复。需要时可撤销本次导入。');
+  };
+
+  const locateShot = (shotId: string) => {
+    const index = displayProject?.shots.findIndex(shot => shot.id === shotId) ?? -1;
+    if (index < 0) return;
+    setShotQuery(''); setShotFilter('all'); setShotPage(Math.floor(index / SHOTS_PER_PAGE) + 1);
+    setFocusRequest(previous => ({ id: shotId, token: (previous?.token || 0) + 1 }));
   };
 
   const currentStep = progress?.stage === 'complete' ? steps.length : steps.findIndex(step => step.id === progress?.stage);
@@ -488,12 +554,22 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
       </div>}
       {restoreSnapshot && !busy && <button type="button" disabled={hasUnsavedChanges} className={cn(secondaryButtonClass, 'mb-6')} onClick={() => {
         onScriptChange(restoreSnapshot.script); onSettingsChange(restoreSnapshot.settings); onProjectChange(restoreSnapshot.project); onCheckpointChange(restoreSnapshot.checkpoint);
-        setRestoreSnapshot(null); setNotice('已恢复到导入前的内容。'); setError(''); setProgress(null); setShotDrafts({});
+        setRestoreSnapshot(null); setNotice('已恢复到导入前的内容。'); setError(''); setProgress(null); setShotDrafts({}); setInputRestoreSnapshot(null); setScriptWarning('');
+        setShotQuery(''); setShotFilter('all'); setShotPage(1); setFocusRequest(null);
       }}><RotateCcw className="size-4" aria-hidden="true" />撤销项目导入</button>}
+      {inputRestoreSnapshot && <button type="button" disabled={busy || hasUnsavedChanges} className={cn(secondaryButtonClass, 'mb-6')} onClick={() => {
+        onScriptChange(inputRestoreSnapshot.script); onSettingsChange(inputRestoreSnapshot.settings); setInputRestoreSnapshot(null);
+        setError(''); setNotice('已恢复到刚才上方的原文与设置。'); setScriptWarning('');
+      }}><RotateCcw className="size-4" aria-hidden="true" />撤销原文与设置恢复</button>}
+      {!!detachedEdits.length && <section aria-label="保留的本地修改" className="mb-6 rounded-xl border border-amber-300/25 p-4">
+        <p className="text-pretty text-sm leading-7 text-amber-100">当前项目不再包含下面的镜头。本地修改仍保留，可复制需要的内容后取消修改。</p>
+        {detachedEdits.map(([id, edit]) => <details key={id} className="mt-3 border-t border-white/10 pt-3"><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">{id} 的未保存修改</summary><pre className="whitespace-pre-wrap break-words py-3 font-sans text-sm leading-7 text-zinc-400">{[edit.values.action, edit.values.camera, edit.values.continuity, edit.values.durationSeconds + ' 秒'].join('\n\n')}</pre><div className="flex flex-wrap gap-2"><CopyText text={[edit.values.action, edit.values.camera, edit.values.continuity, edit.values.durationSeconds + ' 秒'].join('\n\n')} label="复制本地修改" onStatus={setNotice} /><button type="button" disabled={busy} className={secondaryButtonClass} onClick={() => cancelShotEdit(id)}>取消这份修改</button></div></details>)}
+      </section>}
 
       <div className="grid items-start gap-8 xl:grid-cols-3 xl:gap-10">
         <div className={cn(displayProject ? 'xl:col-span-1' : 'xl:col-span-2')}>
-          <ScriptPanel script={script} onScriptChange={onScriptChange} busy={busy || hasUnsavedChanges} reading={reading} onFile={file => { void importScript(file); }}>
+          <ScriptPanel script={script} onScriptChange={value => { setScriptWarning(''); onScriptChange(value); }} busy={busy || hasUnsavedChanges} reading={reading} onFile={file => { void importScript(file); }}>
+            {scriptWarning && <p role="status" className="mt-3 text-pretty text-xs leading-6 text-amber-100">{scriptWarning}</p>}
             <SettingsForm settings={settings} onChange={onSettingsChange} disabled={busy || hasUnsavedChanges} />
             <div className="mt-5 space-y-3">
               <button type="button" disabled={busy || hasUnsavedChanges || !script.trim() || script.length > MAX_SCRIPT_LENGTH} onClick={() => { void run(false); }} className="flex min-h-12 w-full items-center justify-center gap-3 rounded-xl bg-amber-200 px-4 py-3 text-sm font-semibold text-zinc-950 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 disabled:cursor-not-allowed disabled:opacity-50">
@@ -530,7 +606,15 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
               <li><h3 className="text-sm font-medium text-zinc-300">交给你继续创作</h3><p className="mt-1 text-pretty text-sm leading-7 text-zinc-500">每一镜都有可编辑的说明与提示词，可单独重做。</p></li>
             </ol>
           </section> : <div>
-            {(sourceChanged || pending?.kind === 'project' || !!checkpoint || !project) && <p className="mb-6 rounded-xl border border-white/10 bg-white/5 p-4 text-pretty text-sm leading-7 text-zinc-400">{sourceChanged ? '下方保留上一份项目，与你刚调整的剧本或设置不同。重新生成后才会替换。' : project ? '下方是上一份完整草案，继续制作会使用已保留的进度，完成后再替换。' : '这是已保留的部分草案。继续制作后，即可编辑和逐镜重做。'}</p>}
+            {(sourceChanged || pending?.kind === 'project' || !!checkpoint || !project) && <div className="mb-6 rounded-xl border border-white/10 bg-white/5 p-4">
+              <p className="text-pretty text-sm leading-7 text-zinc-400">{sourceChanged ? '下方是上一份项目，与上方当前原文或设置不同，现在只供查看和导出。新一轮完成后才会替换；恢复这份项目对应的原文与设置，可继续编辑。' : project ? '下方是上一份完整草案。中断进度属于另一轮制作，完成后才会替换；若修改当前草案，将移除那轮旧进度，避免覆盖修改。' : '这是已保留的部分草案。继续制作后，即可编辑和逐镜重做。'}</p>
+              {sourceChanged && project && <button type="button" disabled={busy || hasUnsavedChanges} className={cn(secondaryButtonClass, 'mt-3')} onClick={() => {
+                setInputRestoreSnapshot({ script, settings }); onScriptChange(project.sourceScript); onSettingsChange(project.settings);
+                setError(''); setNotice('已恢复这份草案的原文与设置，可以继续编辑。上方刚才的输入仍可撤销恢复。'); setScriptWarning('');
+              }}><RotateCcw className="size-4" aria-hidden="true" />恢复草案对应的原文与设置</button>}
+              <p className="mt-3 text-xs leading-6 text-zinc-500">当前显示草案：{displayProject.settings.platform === 'jimeng' ? '即梦' : '小云雀'} · {displayProject.settings.aspectRatio} · {displayProject.sourceScript.length.toLocaleString()} 字原文</p>
+              {sourceChanged && <details className="mt-2"><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-xs text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">查看草案对应的原文</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words border-l border-white/10 pl-3 font-sans text-sm leading-7 text-zinc-400">{displayProject.sourceScript}</pre></details>}
+            </div>}
             <section className="border-b border-white/10 pb-6" aria-labelledby="director-understanding-title">
               <h2 id="director-understanding-title" className="mb-4 flex items-center gap-2 text-lg font-semibold"><BookOpen className="size-4 text-zinc-400" aria-hidden="true" />故事理解</h2>
               <p className="whitespace-pre-wrap text-pretty text-sm leading-8 text-zinc-300">{displayProject.understanding.summary}</p>
@@ -546,12 +630,26 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
               <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
                 <div><h2 id="director-shots-title" className="text-lg font-semibold">分镜与提示词</h2><p className="mt-1 text-xs leading-6 tabular-nums text-zinc-500">{displayProject.shots.length} 镜 · {readyPrompts} 镜提示词就绪</p></div>
                 <div className="flex flex-wrap gap-2">
-                  <CopyText text={displayProject.shots.filter(shot => !!shot.masterPrompt.trim()).map(shot => '第 ' + shot.shotNumber + ' 镜 · ' + shot.scene + '\n' + shot.masterPrompt).join('\n\n')} label="复制全部提示词" disabled={hasUnsavedChanges} onStatus={setNotice} />
+                  <CopyText text={displayProject.shots.filter(shot => !!shot.masterPrompt.trim()).map(shot => '第 ' + shot.shotNumber + ' 镜 · ' + shot.scene + '\n' + shot.masterPrompt).join('\n\n')} label={sourceChanged ? '复制旧草案提示词' : '复制全部就绪提示词'} disabled={hasUnsavedChanges} onStatus={setNotice} />
                   <button type="button" className={secondaryButtonClass} disabled={busy || hasUnsavedChanges || !project} onClick={() => exportProject('md')}><Download className="size-4" aria-hidden="true" />导出整份草案</button>
                 </div>
               </div>
               <p className="mb-3 text-pretty text-xs leading-6 text-zinc-500">展开一镜修改并保存，再重做提示词。动作、运镜或承接变化时，相邻镜的提示词也需更新。</p>
-              {displayProject.shots.map((shot, index) => <ShotRow key={shot.id} shot={shot} draft={getShotDraft(shot)} dirty={isDirty(getShotDraft(shot), shot)} initialOpen={index === 0} disabled={!canEdit} canRegenerate={canEdit && !hasUnsavedChanges} canCancel={!busy} working={pending?.shotId === shot.id} stopping={stopping} error={shotError?.shotId === shot.id ? shotError.message : undefined} onStop={() => { operation.current?.abort(); setStopping(true); }} onEdit={editShot} onSave={saveShotEdit} onCancel={cancelShotEdit} onRegenerate={shotId => { void regenerate(shotId); }} onStatus={setNotice} />)}
+              {!!displayProject.shots.length && <div className="border-y border-white/10 py-4">
+                <div className="flex flex-wrap gap-3">
+                  <label className="relative min-w-0 flex-1 basis-48"><span className="sr-only">搜索分镜</span><Search className="pointer-events-none absolute left-3 top-3.5 size-4 text-zinc-500" aria-hidden="true" /><input type="search" value={shotQuery} onChange={event => { setShotQuery(event.target.value); setShotPage(1); }} placeholder="搜索场景、人物、动作或对白" className={cn(controlClass, 'w-full pl-9')} /></label>
+                  <label className="min-w-0 flex-1 basis-40"><span className="sr-only">筛选分镜状态</span><select value={shotFilter} onChange={event => { setShotFilter(event.target.value as typeof shotFilter); setShotPage(1); }} className={cn(controlClass, 'w-full')}><option value="all">全部分镜 · {displayProject.shots.length}</option><option value="pending">待更新 · {shotsToUpdate}</option><option value="edited">修改未保存</option></select></label>
+                  <label className="min-w-0 flex-1 basis-40"><span className="sr-only">快速定位镜头</span><select value="" onChange={event => locateShot(event.target.value)} className={cn(controlClass, 'w-full')}><option value="" disabled>快速定位镜头…</option>{displayProject.shots.map(shot => <option key={shot.id} value={shot.id}>第 {shot.shotNumber} 镜 · {shot.scene}</option>)}</select></label>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><p role="status" className="text-xs leading-6 tabular-nums text-zinc-500">找到 {filteredShots.length} 镜{filteredShots.length > SHOTS_PER_PAGE ? '，当前显示 ' + ((currentPage - 1) * SHOTS_PER_PAGE + 1) + '—' + Math.min(currentPage * SHOTS_PER_PAGE, filteredShots.length) + ' 镜' : ''}。翻页和筛选会保留本地修改。</p>{(shotQuery || shotFilter !== 'all') && <button type="button" className={secondaryButtonClass} onClick={() => { setShotQuery(''); setShotFilter('all'); setShotPage(1); }}><X className="size-4" aria-hidden="true" />清除筛选</button>}</div>
+              </div>}
+              <ShotPagination page={currentPage} pages={pageCount} onChange={setShotPage} />
+              {visibleShots.map((shot, index) => {
+                const edit = getShotEdit(shot);
+                return <ShotRow key={shot.id} shot={shot} draft={edit.values} dirty={edit.dirty} conflict={edit.conflict} originChanged={edit.originChanged} focusToken={focusRequest?.id === shot.id ? focusRequest.token : 0} initialOpen={index === 0} disabled={!canEdit} canRegenerate={canEdit && !hasUnsavedChanges} canCancel={!busy} working={pending?.shotId === shot.id} stopping={stopping} error={shotError?.shotId === shot.id ? shotError.message : undefined} onStop={() => { operation.current?.abort(); setStopping(true); }} onEdit={editShot} onSave={saveShotEdit} onCancel={cancelShotEdit} onRebase={rebaseShotEdit} onRegenerate={shotId => { void regenerate(shotId); }} onStatus={setNotice} />;
+              })}
+              {!!displayProject.shots.length && !filteredShots.length && <p className="py-6 text-pretty text-sm leading-7 text-zinc-400">{shotFilter === 'pending' && !search ? '当前没有待更新的镜头。' : shotFilter === 'edited' && !search ? '当前没有未保存的分镜修改。' : '没有找到匹配的镜头，请调整关键词或清除筛选。'}</p>}
+              <ShotPagination page={currentPage} pages={pageCount} onChange={setShotPage} />
               {!displayProject.shots.length && <p className="py-6 text-sm text-zinc-500">分镜尚未完成，可从中断处继续制作。</p>}
             </section>
           </div>}

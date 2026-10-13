@@ -48,6 +48,98 @@ async function projectFixture(splitLines = false) {
   const ai = fakeAI({ splitLines });
   return runAutoDirector({ script, settings, generate: ai.generate });
 }
+function rawProject(source: string, dialogue: string, prompt = '', names = ['李明', '阿兰']): DirectorProject {
+  return { version: 1, sourceScript: source, settings, understanding: {
+    summary: '源剧本', storyArc: '按原文推进', characters: names.filter(name => source.includes(name)).map(name => ({ name, description: '原文角色', sourceExcerpt: name })),
+    scenes: [{ name: '室内', description: '原文空间', sourceExcerpt: '室内' }], continuityRules: [], uncertainties: [],
+  }, shots: [{ id: 'shot-1', shotNumber: 1, scene: '室内', charactersInvolved: names.filter(name => source.includes(name)),
+    sourceExcerpt: source, sourceStart: 0, sourceEnd: source.length, sourceChunkId: 'chunk-1', action: '按源剧本推进', camera: '固定中景',
+    dialogue, durationSeconds: 30, continuity: '同一空间', referencePlan: [], masterPrompt: prompt, postProductionNotes: [], qaWarnings: [] }] };
+}
+
+test('common spaced stage headers and indented multiline dialogue preserve words without stage actions', () => {
+  const source = '室内。\n李明 （低声）：\n  别走。\n  我还在等你。\n（李明握紧钥匙）\n门口安静。';
+  const result = validateDirectorProject(rawProject(source, '李明：别走。\n李明：我还在等你。'));
+  assert.equal(result.shots[0].dialogue, '李明：别走。\n李明：我还在等你。');
+  const nested = '室内。\n李明 (低声):“别叫我“小明”。\n我还有话。”';
+  assert.equal(validateDirectorProject(rawProject(nested, '李明：别叫我“小明”。\n李明：我还有话。')).shots[0].dialogue, '李明：别叫我“小明”。\n李明：我还有话。');
+  const inline = '室内。李明（低声）：“别走。”';
+  assert.equal(validateDirectorProject(rawProject(inline, '李明：别走。')).shots[0].dialogue, '李明：别走。');
+});
+
+test('prose speaker comes from the speaking clause, not all characters in an earlier sentence', () => {
+  const source = '室内。阿兰关门，李明看着她。李明低声说：“别走。”';
+  assert.equal(validateDirectorProject(rawProject(source, '李明：别走。')).shots[0].dialogue, '李明：别走。');
+});
+
+test('prompt validation counts repeated utterances and excludes spoken numeric ranges from the shot timeline', () => {
+  const repeated = '室内。\n李明：“回来。”\n李明：“回来。”';
+  assert.throws(() => validateDirectorProject(rawProject(repeated, '李明：回来。\n李明：回来。', '0—30秒：李明说：“回来。”')), /对白.*次数|对白.*遗漏/);
+  const source = '室内。\n李明：“我说0—4秒，4—8秒。”';
+  assert.doesNotThrow(() => validateDirectorProject(rawProject(source, '李明：我说0—4秒，4—8秒。', '0—30秒：李明说：“我说0—4秒，4—8秒。”')));
+});
+
+test('visual style quotes are not speech while invented English double-quoted dialogue is rejected', () => {
+  const source = '室内。李明关门。';
+  assert.doesNotThrow(() => validateDirectorProject(rawProject(source, '', '风格：呈现“克制的压迫感”。\n0—30秒：李明关门。')));
+  assert.throws(() => validateDirectorProject(rawProject(source, '', '0—30秒：李明说："我会回来。"')), /新增台词|原文没有/);
+});
+
+test('English speaker names, fullwidth spacing, voiceover and structural stage notes keep speech intact', () => {
+  const english = '室内。\nJohn Smith (quietly): "Come back."';
+  assert.equal(validateDirectorProject(rawProject(english, 'John Smith：Come back.', '', ['John Smith'])).shots[0].dialogue, 'John Smith：Come back.');
+  const fullwidth = '室内。\n李明　（低声）：别走。';
+  assert.equal(validateDirectorProject(rawProject(fullwidth, '李明：别走。')).shots[0].dialogue, '李明：别走。');
+  const narration = '室内。\n旁白（画外音）：夜深了。（镜头转向窗外）\n李明：别走。';
+  assert.equal(validateDirectorProject(rawProject(narration, '旁白：夜深了。\n李明：别走。')).shots[0].dialogue, '旁白：夜深了。\n李明：别走。');
+  const ambiguous = '室内。阿兰看着李明说：“别走。”';
+  assert.equal(validateDirectorProject(rawProject(ambiguous, '别走。')).shots[0].dialogue, '别走。');
+});
+
+test('a short utterance cannot be counted inside another line or inside a timestamp', () => {
+  const source = '室内。\n李明：“你回来。”\n李明：“回来。”';
+  assert.throws(() => validateDirectorProject(rawProject(source, '李明：你回来。\n李明：回来。', '0—30秒：李明说：“你回来。”')), /遗漏.*对白/);
+  const digit = '室内。\n李明：“0”';
+  assert.throws(() => validateDirectorProject(rawProject(digit, '李明：0', '0—30秒：李明停住。')), /遗漏.*对白/);
+  assert.doesNotThrow(() => validateDirectorProject(rawProject(digit, '李明：0', '0—30秒：李明说：“0”')));
+});
+
+test('old v1 JSON migrates only the previous exact extraction and invalidates affected prompts', async () => {
+  const source = '室内。\n李明 （低声）：\n  别走。\n  我还在等你。';
+  const old = rawProject(source, '', '0—30秒：李明站在门边。');
+  old.shots[0].postProductionNotes = ['旧提示词的后期建议'];
+  const migrated = validateDirectorProject(old);
+  assert.equal(migrated.shots[0].dialogue, '李明：别走。\n李明：我还在等你。');
+  assert.equal(migrated.shots[0].masterPrompt, '');
+  assert.deepEqual(migrated.shots[0].postProductionNotes, []);
+  assert.ok(migrated.shots[0].qaWarnings.some(warning => warning.includes('规则已更新')));
+  assert.equal(old.shots[0].masterPrompt, '0—30秒：李明站在门边。');
+  assert.deepEqual(validateDirectorProject(migrated), migrated);
+  const checkpoint: DirectorCheckpoint = { version: 1, sourceScript: source, settings, chunks: chunkDirectorScript(source),
+    analyses: [{ chunkId: 'chunk-1', summary: '原文事件', beats: ['原文推进'], characters: old.understanding.characters, scenes: old.understanding.scenes, continuityRules: [], uncertainties: [] }],
+    understanding: old.understanding, shots: old.shots, completedPromptShotIds: ['shot-1'] };
+  const restored = validateDirectorCheckpoint(checkpoint);
+  assert.deepEqual(restored.completedPromptShotIds, []);
+  assert.equal(restored.shots[0].dialogue, migrated.shots[0].dialogue);
+  const ai = fakeAI();
+  const completed = await runAutoDirector({ script: source, settings, checkpoint, generate: ai.generate });
+  assert.equal(ai.calls.length, 1);
+  assert.ok(ai.calls[0].includes('[DIRECTOR_PROMPTS]'));
+  assert.ok(completed.shots[0].masterPrompt.includes('我还在等你。'));
+  const tampered = structuredClone(old); tampered.shots[0].dialogue = '李明：我替你决定。';
+  assert.throws(() => validateDirectorProject(tampered), /对白与原文/);
+});
+
+test('migration preserves overloaded source dialogue as pending review and blocks generation before provider calls', async () => {
+  const source = `室内。\n李明 （低声）：\n  ${'请逐字保留。'.repeat(25)}`;
+  const migrated = validateDirectorProject(rawProject(source, '', '0—30秒：李明停住。'));
+  assert.ok(migrated.shots[0].dialogue.includes('请逐字保留。'.repeat(25)));
+  assert.equal(migrated.shots[0].masterPrompt, '');
+  assert.ok(migrated.shots[0].qaWarnings.some(warning => warning.includes('需要拆镜')));
+  assert.deepEqual(validateDirectorProject(migrated), migrated);
+  const fail: DirectorGenerate = async () => assert.fail('overloaded restored dialogue must not call provider');
+  await assert.rejects(regenerateDirectorShot(migrated, 'shot-1', fail), /需要拆镜/);
+});
 
 test('pipeline uses real injected generation, full source coverage and source-extracted exact dialogue', async () => {
   const ai = fakeAI();
