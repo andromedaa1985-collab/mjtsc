@@ -3,7 +3,8 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { AlertCircle, ArrowRight, BookOpen, Check, ChevronLeft, ChevronRight, Clapperboard, Copy, Download, FileText, Pause, RotateCcw, Search, Settings2, Upload, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { readScriptFileWithInfo } from '../lib/scriptFiles';
-import { commitDirectorShotEdit, createDirectorShotEdit, readDirectorShotEdit, rebaseDirectorShotEdit, type DirectorShotDraft, type DirectorShotEdit } from '../lib/directorEditing';
+import { commitDirectorShotEdit, createDirectorShotEdit, directorShotEditHasChanges, readDirectorShotEdit, rebaseDirectorShotEdit, type DirectorShotDraft, type DirectorShotEdit, type DirectorCraftField } from '../lib/directorEditing';
+import { DIRECTOR_METHODS, DIRECTOR_METHOD_TEMPLATES, getDirectorMethod } from '../lib/directorMethods';
 import {
   runAutoDirector, regenerateDirectorShot, validateDirectorProject, validateDirectorCheckpoint, validateDirectorSettings, exportDirectorMarkdown,
   type DirectorProject, type DirectorCheckpoint, type DirectorSettings, type DirectorProgress, type DirectorShot,
@@ -45,11 +46,11 @@ function CopyText({ text, label, disabled = false, onStatus }: { text: string; l
   );
 }
 
-function TextField({ label, value, onChange, disabled, rows = 3, hint }: { label: string; value: string; onChange: (value: string) => void; disabled: boolean; rows?: number; hint?: string }) {
+function TextField({ label, value, onChange, disabled, rows = 3, hint, placeholder, maxLength }: { label: string; value: string; onChange: (value: string) => void; disabled: boolean; rows?: number; hint?: string; placeholder?: string; maxLength?: number }) {
   return (
     <label className="block space-y-2">
       <span className="block text-sm font-medium text-zinc-300">{label}</span>
-      <textarea aria-label={label} value={value} onChange={event => onChange(event.target.value)} disabled={disabled} rows={rows} className={cn(controlClass, 'w-full resize-y leading-7')} />
+      <textarea aria-label={label} value={value} onChange={event => onChange(event.target.value)} disabled={disabled} rows={rows} placeholder={placeholder} maxLength={maxLength} className={cn(controlClass, 'w-full resize-y leading-7')} />
       {hint && <span className="block text-pretty text-xs leading-5 text-zinc-500">{hint}</span>}
     </label>
   );
@@ -155,14 +156,27 @@ const steps = [
 ];
 
 const SHOTS_PER_PAGE = 12;
+const craftFields: Array<{ key: DirectorCraftField; label: string; placeholder: string }> = [
+  { key: 'emotionStart', label: '起始表演状态', placeholder: '用可见的目光、呼吸、手部或站姿描述起点' },
+  { key: 'emotionalTrigger', label: '变化触发', placeholder: '原文中的哪句对白、声音或动作带来变化？' },
+  { key: 'emotionEnd', label: '结束表演状态', placeholder: '变化后留下什么可见状态，下一镜如何承接？' },
+  { key: 'spatialAnchor', label: '空间锚点', placeholder: '人物相对门窗、道具与另一人物的位置' },
+  { key: 'cameraPurpose', label: '运镜目的', placeholder: '运镜揭示什么信息或关系？静止观察也可以' },
+  { key: 'lightSoundCue', label: '光色与声音触发', placeholder: '具体光源或声音何时发生变化，如何影响注意力？' },
+];
+function formatShotDraft(draft: DirectorShotDraft) {
+  return ['画面动作：' + draft.action, '镜头观察与运镜：' + draft.camera, '承接与结束状态：' + draft.continuity, '片段时长：' + draft.durationSeconds + ' 秒',
+    ...craftFields.filter(field => draft[field.key].trim()).map(field => field.label + '：' + draft[field.key])].join('\n\n');
+}
 
 function sameSettings(first: DirectorSettings, second: DirectorSettings) {
-  return (['platform', 'visualStyle', 'aspectRatio', 'rhythm', 'lighting', 'sound'] as const)
+  return (['platform', 'visualStyle', 'aspectRatio', 'rhythm', 'lighting', 'sound', 'creativeMethod'] as const)
     .every(key => first[key] === second[key]);
 }
 
-function SettingsForm({ settings, onChange, disabled }: { settings: DirectorSettings; onChange: (settings: DirectorSettings) => void; disabled: boolean }) {
+function SettingsForm({ settings, onChange, disabled, onStatus }: { settings: DirectorSettings; onChange: (settings: DirectorSettings) => void; disabled: boolean; onStatus: (message: string) => void }) {
   const update = <K extends keyof DirectorSettings>(key: K, value: DirectorSettings[K]) => onChange({ ...settings, [key]: value });
+  const method = getDirectorMethod(settings.creativeMethod);
   return (
     <details className="mt-5 border-y border-white/10 py-3">
       <summary className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg text-sm text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/50">
@@ -170,6 +184,17 @@ function SettingsForm({ settings, onChange, disabled }: { settings: DirectorSett
         <span className="ml-auto text-xs text-zinc-500">{settings.platform === 'jimeng' ? '即梦' : '小云雀'} · {settings.aspectRatio}</span>
       </summary>
       <div className="grid gap-4 py-4 sm:grid-cols-2">
+        <div className="space-y-3 sm:col-span-2">
+          <label className="block space-y-2 text-sm text-zinc-400"><span className="block">创作方法</span><select value={settings.creativeMethod} onChange={event => update('creativeMethod', event.target.value as DirectorSettings['creativeMethod'])} disabled={disabled} className={cn(controlClass, 'w-full')}>{DIRECTOR_METHODS.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
+          <p className="text-pretty text-xs leading-6 text-zinc-400">{method.summary}</p>
+          <p className="text-pretty text-xs leading-6 text-zinc-500">按原文与场景需要应用方法，允许不适用项留空。具体画面需在所选工具生成后审看。</p>
+          <details className="border-y border-white/10 py-1">
+            <summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">方法原则与一手来源</summary>
+            <div className="divide-y divide-white/10">{method.principles.map(principle => <section key={principle.id} className="space-y-2 py-4"><h4 className="text-sm font-medium text-zinc-200">{principle.title}</h4><p className="text-pretty text-xs leading-6 text-zinc-400">{principle.description}</p><p className="text-pretty text-xs leading-6 text-zinc-500">适用：{principle.applyWhen}</p><p className="text-pretty text-xs leading-6 text-zinc-500">边界：{principle.limit}</p></section>)}</div>
+            {!!method.sources.length && <div className="border-t border-white/10 py-4"><h4 className="mb-2 text-xs font-medium text-zinc-400">公开的一手资料</h4><ul className="space-y-2">{method.sources.map(source => <li key={source.id}><a href={source.url} target="_blank" rel="noopener noreferrer" className="inline-block rounded-lg py-1 text-xs leading-6 text-amber-100 underline decoration-amber-200/30 underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">{source.title}<span className="sr-only">，在新窗口打开</span></a></li>)}</ul></div>}
+          </details>
+          {!!DIRECTOR_METHOD_TEMPLATES.length && <details className="border-b border-white/10 pb-1"><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">查看创作练习示例</summary><p className="mb-3 text-pretty text-xs leading-6 text-zinc-500">示例用于理解方法。查看或复制不会替换你的剧本，也不会生成正式项目。</p><div className="divide-y divide-white/10">{DIRECTOR_METHOD_TEMPLATES.map(template => <details key={template.id} className="py-3"><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">{template.title}<span className="ml-2 text-xs tabular-nums text-zinc-500">{template.durationSeconds} 秒</span></summary><p className="mb-2 mt-3 text-xs font-medium text-zinc-500">练习剧本</p><p className="whitespace-pre-wrap text-pretty text-sm leading-7 text-zinc-400">{template.script}</p><p className="mb-2 mt-4 text-xs font-medium text-zinc-500">示例提示词</p><pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words border-l border-white/15 pl-3 font-sans text-xs leading-7 text-zinc-400">{template.prompt}</pre><div className="mt-3 flex flex-wrap gap-2"><CopyText text={template.script} label="复制练习剧本" onStatus={onStatus} /><CopyText text={template.prompt} label="复制示例提示词" onStatus={onStatus} /></div></details>)}</div></details>}
+        </div>
         <label className="space-y-2 text-sm text-zinc-400">
           <span className="block">目标工具</span>
           <select value={settings.platform} onChange={event => update('platform', event.target.value as DirectorSettings['platform'])} disabled={disabled} className={cn(controlClass, 'w-full')}>
@@ -247,12 +272,17 @@ function ShotRow({ shot, draft, initialOpen, focusToken, disabled, working, stop
             </div>
           </div>
         </div>
+        <details className="border-y border-white/10 py-1">
+          <summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">逐镜创作意图<span className="ml-2 text-xs text-zinc-500">按场景需要补充</span></summary>
+          <p className="mb-4 mt-2 text-pretty text-xs leading-6 text-zinc-500">围绕原文记录可见的表演变化、位置与观察目的；不适用可留空。原文未说明的补充请注明「设计建议」，对白仍来自原文。</p>
+          <div className="grid gap-5 pb-4 sm:grid-cols-2">{craftFields.map(field => <TextField key={field.key} label={field.label} value={draft[field.key]} onChange={value => onEdit(shot.id, field.key, value)} disabled={disabled} rows={2} placeholder={field.placeholder} maxLength={1500} />)}</div>
+        </details>
         {dirty && <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3">
           <p className="flex-1 text-pretty text-xs leading-6 text-amber-100">{conflict ? originChanged ? '这镜对应的原文已变化。本地修改仍保留，请复制需要的文字后取消修改，重新核对原文。' : '已保存的分镜发生变化。本地修改仍保留；核对后可基于最新内容保留你改过的字段，或取消修改。' : '修改尚未保存。保存后，本镜与必要的相邻镜承接提示词会标记为待更新。'}</p>
           {conflict && !originChanged ? <button type="button" disabled={disabled} className={secondaryButtonClass} onClick={() => onRebase(shot.id)}>保留我改过的字段</button> : <button type="button" disabled={disabled || conflict} className={secondaryButtonClass} onClick={() => onSave(shot.id)}><Check className="size-4" aria-hidden="true" />保存修改</button>}
           <button type="button" disabled={!canCancel} className={secondaryButtonClass} onClick={() => onCancel(shot.id)}>取消修改</button>
         </div>}
-        {conflict && <details><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">核对当前已保存的分镜</summary><dl className="grid gap-3 border-l border-white/15 pl-3 text-sm leading-7"><div><dt className="text-zinc-500">画面动作</dt><dd className="whitespace-pre-wrap text-zinc-300">{shot.action}</dd></div><div><dt className="text-zinc-500">镜头观察与运镜</dt><dd className="whitespace-pre-wrap text-zinc-300">{shot.camera}</dd></div><div><dt className="text-zinc-500">承接与结束状态</dt><dd className="whitespace-pre-wrap text-zinc-300">{shot.continuity}</dd></div><div><dt className="text-zinc-500">片段时长</dt><dd className="tabular-nums text-zinc-300">{shot.durationSeconds} 秒</dd></div></dl></details>}
+        {conflict && <details><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">核对当前已保存的分镜</summary><dl className="grid gap-3 border-l border-white/15 pl-3 text-sm leading-7"><div><dt className="text-zinc-500">画面动作</dt><dd className="whitespace-pre-wrap text-zinc-300">{shot.action}</dd></div><div><dt className="text-zinc-500">镜头观察与运镜</dt><dd className="whitespace-pre-wrap text-zinc-300">{shot.camera}</dd></div><div><dt className="text-zinc-500">承接与结束状态</dt><dd className="whitespace-pre-wrap text-zinc-300">{shot.continuity}</dd></div><div><dt className="text-zinc-500">片段时长</dt><dd className="tabular-nums text-zinc-300">{shot.durationSeconds} 秒</dd></div>{craftFields.map(field => <div key={field.key}><dt className="text-zinc-500">{field.label}</dt><dd className="whitespace-pre-wrap text-zinc-300">{shot.craft?.[field.key] || '未填写'}</dd></div>)}</dl></details>}
         {error && <p role="alert" className="rounded-xl border border-red-400/25 bg-red-400/5 p-3 text-pretty text-sm leading-7 text-red-200">{error}</p>}
         <details className="text-sm">
           <summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-zinc-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">对照原文</summary>
@@ -332,7 +362,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
   const readyPrompts = displayProject?.shots.filter(shot => !!shot.masterPrompt.trim()).length || 0;
   const canEdit = !!project && !busy && !sourceChanged;
   const getShotEdit = (shot: DirectorShot) => readDirectorShotEdit(shot, shotDrafts[shot.id]);
-  const detachedEdits = Object.entries(shotDrafts).filter(([id, edit]) => !displayProject?.shots.some(shot => shot.id === id) && (['action', 'camera', 'continuity', 'durationSeconds'] as const).some(key => edit.values[key] !== edit.base[key]));
+  const detachedEdits = Object.entries(shotDrafts).filter(([id, edit]) => !displayProject?.shots.some(shot => shot.id === id) && directorShotEditHasChanges(edit));
   const hasUnsavedChanges = !!displayProject?.shots.some(shot => getShotEdit(shot).dirty) || detachedEdits.length > 0;
   const shotsToUpdate = displayProject?.shots.filter(shot => !shot.masterPrompt.trim() || getShotEdit(shot).dirty).length || 0;
   const search = shotQuery.trim().toLocaleLowerCase();
@@ -340,7 +370,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
     const local = getShotEdit(shot);
     if (shotFilter === 'pending' && shot.masterPrompt.trim() && !local.dirty) return false;
     if (shotFilter === 'edited' && !local.dirty) return false;
-    return !search || [String(shot.shotNumber), shot.scene, ...shot.charactersInvolved, local.values.action, shot.dialogue, shot.sourceExcerpt].some(value => value.toLocaleLowerCase().includes(search));
+    return !search || [String(shot.shotNumber), shot.scene, ...shot.charactersInvolved, local.values.action, shot.dialogue, shot.sourceExcerpt, ...craftFields.map(field => local.values[field.key])].some(value => value.toLocaleLowerCase().includes(search));
   });
   const pageCount = Math.max(1, Math.ceil(filteredShots.length / SHOTS_PER_PAGE));
   const currentPage = Math.min(shotPage, pageCount);
@@ -563,14 +593,14 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
       }}><RotateCcw className="size-4" aria-hidden="true" />撤销原文与设置恢复</button>}
       {!!detachedEdits.length && <section aria-label="保留的本地修改" className="mb-6 rounded-xl border border-amber-300/25 p-4">
         <p className="text-pretty text-sm leading-7 text-amber-100">当前项目不再包含下面的镜头。本地修改仍保留，可复制需要的内容后取消修改。</p>
-        {detachedEdits.map(([id, edit]) => <details key={id} className="mt-3 border-t border-white/10 pt-3"><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">{id} 的未保存修改</summary><pre className="whitespace-pre-wrap break-words py-3 font-sans text-sm leading-7 text-zinc-400">{[edit.values.action, edit.values.camera, edit.values.continuity, edit.values.durationSeconds + ' 秒'].join('\n\n')}</pre><div className="flex flex-wrap gap-2"><CopyText text={[edit.values.action, edit.values.camera, edit.values.continuity, edit.values.durationSeconds + ' 秒'].join('\n\n')} label="复制本地修改" onStatus={setNotice} /><button type="button" disabled={busy} className={secondaryButtonClass} onClick={() => cancelShotEdit(id)}>取消这份修改</button></div></details>)}
+        {detachedEdits.map(([id, edit]) => <details key={id} className="mt-3 border-t border-white/10 pt-3"><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">{id} 的未保存修改</summary><pre className="whitespace-pre-wrap break-words py-3 font-sans text-sm leading-7 text-zinc-400">{formatShotDraft(edit.values)}</pre><div className="flex flex-wrap gap-2"><CopyText text={formatShotDraft(edit.values)} label="复制本地修改" onStatus={setNotice} /><button type="button" disabled={busy} className={secondaryButtonClass} onClick={() => cancelShotEdit(id)}>取消这份修改</button></div></details>)}
       </section>}
 
       <div className="grid items-start gap-8 xl:grid-cols-3 xl:gap-10">
         <div className={cn(displayProject ? 'xl:col-span-1' : 'xl:col-span-2')}>
           <ScriptPanel script={script} onScriptChange={value => { setScriptWarning(''); onScriptChange(value); }} busy={busy || hasUnsavedChanges} reading={reading} onFile={file => { void importScript(file); }}>
             {scriptWarning && <p role="status" className="mt-3 text-pretty text-xs leading-6 text-amber-100">{scriptWarning}</p>}
-            <SettingsForm settings={settings} onChange={onSettingsChange} disabled={busy || hasUnsavedChanges} />
+            <SettingsForm settings={settings} onChange={onSettingsChange} disabled={busy || hasUnsavedChanges} onStatus={setNotice} />
             <div className="mt-5 space-y-3">
               <button type="button" disabled={busy || hasUnsavedChanges || !script.trim() || script.length > MAX_SCRIPT_LENGTH} onClick={() => { void run(false); }} className="flex min-h-12 w-full items-center justify-center gap-3 rounded-xl bg-amber-200 px-4 py-3 text-sm font-semibold text-zinc-950 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 disabled:cursor-not-allowed disabled:opacity-50">
                 <Clapperboard className="size-4" aria-hidden="true" />{pending?.kind === 'project' ? '正在制作创作草案…' : '自动生成分镜与提示词'}{!busy && <ArrowRight className="size-4" aria-hidden="true" />}
@@ -612,7 +642,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
                 setInputRestoreSnapshot({ script, settings }); onScriptChange(project.sourceScript); onSettingsChange(project.settings);
                 setError(''); setNotice('已恢复这份草案的原文与设置，可以继续编辑。上方刚才的输入仍可撤销恢复。'); setScriptWarning('');
               }}><RotateCcw className="size-4" aria-hidden="true" />恢复草案对应的原文与设置</button>}
-              <p className="mt-3 text-xs leading-6 text-zinc-500">当前显示草案：{displayProject.settings.platform === 'jimeng' ? '即梦' : '小云雀'} · {displayProject.settings.aspectRatio} · {displayProject.sourceScript.length.toLocaleString()} 字原文</p>
+              <p className="mt-3 text-xs leading-6 text-zinc-500">当前显示草案：{displayProject.settings.platform === 'jimeng' ? '即梦' : '小云雀'} · {displayProject.settings.aspectRatio} · {getDirectorMethod(displayProject.settings.creativeMethod).title} · {displayProject.sourceScript.length.toLocaleString()} 字原文</p>
               {sourceChanged && <details className="mt-2"><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-xs text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">查看草案对应的原文</summary><pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words border-l border-white/10 pl-3 font-sans text-sm leading-7 text-zinc-400">{displayProject.sourceScript}</pre></details>}
             </div>}
             <section className="border-b border-white/10 pb-6" aria-labelledby="director-understanding-title">
@@ -634,7 +664,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
                   <button type="button" className={secondaryButtonClass} disabled={busy || hasUnsavedChanges || !project} onClick={() => exportProject('md')}><Download className="size-4" aria-hidden="true" />导出整份草案</button>
                 </div>
               </div>
-              <p className="mb-3 text-pretty text-xs leading-6 text-zinc-500">展开一镜修改并保存，再重做提示词。动作、运镜或承接变化时，相邻镜的提示词也需更新。</p>
+              <p className="mb-3 text-pretty text-xs leading-6 text-zinc-500">展开一镜修改并保存，再重做提示词。动作、运镜、承接或创作意图变化时，相邻镜的提示词也需更新。</p>
               {!!displayProject.shots.length && <div className="border-y border-white/10 py-4">
                 <div className="flex flex-wrap gap-3">
                   <label className="relative min-w-0 flex-1 basis-48"><span className="sr-only">搜索分镜</span><Search className="pointer-events-none absolute left-3 top-3.5 size-4 text-zinc-500" aria-hidden="true" /><input type="search" value={shotQuery} onChange={event => { setShotQuery(event.target.value); setShotPage(1); }} placeholder="搜索场景、人物、动作或对白" className={cn(controlClass, 'w-full pl-9')} /></label>

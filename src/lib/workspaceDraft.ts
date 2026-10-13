@@ -51,11 +51,18 @@ export function validateDraft(value: unknown): WorkspaceDraft {
       new Set(value.storyboards.map((shot: any) => shot.shotNumber)).size !== value.storyboards.length)) {
     throw new Error('分镜草稿格式不正确。');
   }
+  const directorProject = value.directorProject == null ? null : validateDirectorProject(value.directorProject);
+  const directorCheckpoint = value.directorCheckpoint == null ? null : validateDirectorCheckpoint(value.directorCheckpoint);
+  // Missing settings belong to an older saved draft. Preserve its method or
+  // the settings of a valid result tied to this exact script, rather than
+  // silently applying the new-project default to an existing production.
+  const legacySettings = { ...defaultDirectorSettings, creativeMethod: 'standard' as const };
+  const savedAuthority = directorCheckpoint?.sourceScript === value.scriptData ? directorCheckpoint :
+    directorProject?.sourceScript === value.scriptData ? directorProject : null;
   return { version: 1, currentStage: value.currentStage, showLanding: value.showLanding,
     scriptData: value.scriptData, charactersAndScenes: assets, storyboards: value.storyboards,
-    directorSettings: value.directorSettings === undefined ? { ...defaultDirectorSettings } : validateDirectorSettings(value.directorSettings),
-    directorProject: value.directorProject == null ? null : validateDirectorProject(value.directorProject),
-    directorCheckpoint: value.directorCheckpoint == null ? null : validateDirectorCheckpoint(value.directorCheckpoint),
+    directorSettings: value.directorSettings === undefined ? { ...(savedAuthority?.settings || legacySettings) } : validateDirectorSettings(value.directorSettings),
+    directorProject, directorCheckpoint,
     ...(typeof value.analyzedScript === 'string' ? { analyzedScript: value.analyzedScript } : {}) };
 }
 
@@ -83,7 +90,7 @@ export function loadDraft(storage: Pick<Storage, 'getItem'>, uid: string) {
         showLanding: recover('showLanding', '首页状态', false),
         charactersAndScenes: recover('charactersAndScenes', '人物与场景', null),
         storyboards: recover('storyboards', '逐步分镜', null),
-        directorSettings: recover('directorSettings', '创作设置', { ...defaultDirectorSettings }),
+        directorSettings: recover('directorSettings', '创作设置', { ...defaultDirectorSettings, creativeMethod: value.directorSettings === undefined ? 'standard' : defaultDirectorSettings.creativeMethod }),
         directorProject: recover('directorProject', '自动创作成果', null),
         directorCheckpoint: recover('directorCheckpoint', '中断进度', null),
         ...(typeof value.analyzedScript === 'string' ? { analyzedScript: value.analyzedScript } : {}),
@@ -91,7 +98,7 @@ export function loadDraft(storage: Pick<Storage, 'getItem'>, uid: string) {
       // A damaged settings block can be recovered from valid progress tied to
       // this exact script; do not replace legitimate settings or changed input.
       let settingsRecovery = '';
-      if (recoveredFields.includes('创作设置')) {
+      if (recoveredFields.includes('创作设置') || value.directorSettings === undefined) {
         const authority = draft.directorCheckpoint?.sourceScript === draft.scriptData ? draft.directorCheckpoint :
           draft.directorProject?.sourceScript === draft.scriptData ? draft.directorProject : null;
         if (authority) {

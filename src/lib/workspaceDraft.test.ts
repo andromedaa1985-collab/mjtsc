@@ -48,12 +48,35 @@ test('duplicate shot identities cannot hide another saved shot', () => {
 
 test('new drafts open the automatic studio while old drafts retain their workflow', () => {
   assert.equal(emptyDraft.currentStage, 'auto-director');
+  assert.equal(emptyDraft.directorSettings.creativeMethod, 'sijia-film');
   const oldDraft = { version: 1, currentStage: 'script', showLanding: false, scriptData: '旧剧本', charactersAndScenes: null, storyboards: null };
   const restored = validateDraft(oldDraft);
   assert.equal(restored.currentStage, 'script');
   assert.equal(restored.directorProject, null);
   assert.equal(restored.directorCheckpoint, null);
   assert.equal(restored.directorSettings.platform, emptyDraft.directorSettings.platform);
+  assert.equal(restored.directorSettings.creativeMethod, 'standard');
+});
+
+test('legacy settings without a method retain the earlier method and refresh without cache damage', () => {
+  const storage = memory();
+  const { creativeMethod: _method, ...legacySettings } = emptyDraft.directorSettings;
+  storage.setItem(draftKey('writer'), JSON.stringify({ ...emptyDraft, scriptData: '原文保留', directorSettings: legacySettings }));
+  const restored = loadDraft(storage, 'writer');
+  assert.equal(restored.error, '');
+  assert.equal(restored.draft.directorSettings.creativeMethod, 'standard');
+  assert.equal(saveDraft(storage, 'writer', restored.draft), '');
+  assert.deepEqual(loadDraft(storage, 'writer').draft, restored.draft);
+});
+
+test('an unsupported creative method isolates settings damage while retaining the source and original cache', () => {
+  const storage = memory();
+  const raw = JSON.stringify({ ...emptyDraft, scriptData: '先别走。', directorSettings: { ...emptyDraft.directorSettings, creativeMethod: 'arbitrary-imported-prompt' } });
+  storage.setItem(draftKey('writer'), raw);
+  const restored = loadDraft(storage, 'writer');
+  assert.deepEqual(restored.recoveredFields, ['创作设置']);
+  assert.equal(restored.draft.scriptData, '先别走。');
+  assert.equal(storage.getItem(draftKey('writer')), raw);
 });
 
 test('automatic studio settings are persisted and invalid checkpoints are rejected', () => {
@@ -64,6 +87,35 @@ test('automatic studio settings are persisted and invalid checkpoints are reject
   assert.throws(() => validateDraft({ ...draft, directorCheckpoint: { version: 1, sourceScript: '错误结构' } }));
   assert.throws(() => validateDraft({ ...draft, directorProject: { version: 1, shots: '错误结构' } }));
   assert.throws(() => validateDraft({ ...draft, directorSettings: { ...draft.directorSettings, platform: 'unsupported' } }));
+});
+
+test('method and shot craft survive account draft roundtrips without becoming spoken dialogue', () => {
+  const storage = memory();
+  const sourceScript = '室内。林澈把钥匙放到桌角。';
+  const craft = { emotionStart: '指尖握紧钥匙', emotionalTrigger: '钥匙接触桌角', emotionEnd: '手指松开，留一拍停顿', spatialAnchor: '门在身后，桌角在右前方', cameraPurpose: '让观众看到手与桌面的接触', lightSoundCue: '钥匙接触时一声轻响，灯的位置保持不变' };
+  const directorProject = { version: 1 as const, sourceScript, settings: { ...emptyDraft.directorSettings },
+    understanding: { summary: '林澈放下钥匙', storyArc: '持物到放下', characters: [{ name: '林澈', description: '原文人物', sourceExcerpt: '林澈' }], scenes: [{ name: '室内', description: '原文空间', sourceExcerpt: '室内' }], continuityRules: [], uncertainties: [] },
+    shots: [{ id: 'shot-1', shotNumber: 1, scene: '室内', charactersInvolved: ['林澈'], sourceExcerpt: sourceScript, sourceStart: 0, sourceEnd: sourceScript.length, sourceChunkId: 'chunk-1', action: '把钥匙放到桌角', camera: '桌角特写', dialogue: '', durationSeconds: 8, continuity: '钥匙留在桌角', craft, referencePlan: [], masterPrompt: '', postProductionNotes: [], qaWarnings: [] }] };
+  assert.equal(saveDraft(storage, 'writer', { ...emptyDraft, scriptData: sourceScript, directorProject }), '');
+  const restored = loadDraft(storage, 'writer');
+  assert.equal(restored.error, '');
+  assert.deepEqual(restored.draft.directorProject?.shots[0].craft, craft);
+  assert.equal(restored.draft.directorProject?.shots[0].dialogue, '');
+  assert.equal(restored.draft.directorProject?.settings.creativeMethod, 'sijia-film');
+});
+
+test('missing entire settings block adopts valid same-source progress instead of the new-project default', () => {
+  const storage = memory();
+  const sourceScript = '林澈推开门。';
+  const settings = { ...emptyDraft.directorSettings, creativeMethod: 'standard' as const, aspectRatio: '9:16' as const };
+  const directorCheckpoint = { version: 1, sourceScript, settings, chunks: chunkDirectorScript(sourceScript), analyses: [], shots: [], completedPromptShotIds: [] };
+  const { directorSettings: _settings, ...olderDraft } = emptyDraft;
+  storage.setItem(draftKey('writer'), JSON.stringify({ ...olderDraft, scriptData: sourceScript, directorCheckpoint }));
+  const restored = loadDraft(storage, 'writer');
+  assert.equal(restored.error, '');
+  assert.deepEqual(restored.draft.directorSettings, settings);
+  storage.setItem(draftKey('writer'), JSON.stringify({ ...olderDraft, scriptData: sourceScript, directorCheckpoint, currentStage: 'broken' }));
+  assert.deepEqual(loadDraft(storage, 'writer').draft.directorSettings, settings);
 });
 
 test('a broken optional checkpoint does not erase a valid script or edited storyboard', () => {
