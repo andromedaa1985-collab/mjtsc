@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { BookOpen, Users, LayoutTemplate, Video, Settings, Sparkles, Mail, Wand2, Download, X, CheckCircle2 } from 'lucide-react';
 import { auth, logOut, db } from './lib/firebase';
@@ -10,6 +10,8 @@ import { draftKey, emptyDraft, loadDraft, loadLegacyDraft, saveDraftWithBaseline
 import Login from './components/Login';
 import LandingPage from './components/LandingPage';
 import RechargeModal from './components/RechargeModal';
+import ApiConnectionSettings from './components/ApiConnectionSettings';
+import { clearApiConnectionOwner, getApiConnectionSummary, setApiConnectionOwner, subscribeApiConnection } from './lib/apiConnection';
 
 const ScriptInput = lazy(() => import('./components/ScriptInput'));
 const CharacterSceneRefinement = lazy(() => import('./components/CharacterSceneRefinement'));
@@ -41,6 +43,8 @@ function getInitialDraft(uid: string) {
 }
 
 export function Workspace({ user, credits, accountError = '' }: { user: User; credits: number | null; accountError?: string }) {
+  const apiActivity = useSyncExternalStore(subscribeApiConnection, () => getApiConnectionSummary(user.uid), () => getApiConnectionSummary(null));
+  useEffect(() => { setApiConnectionOwner(user.uid); return () => clearApiConnectionOwner(user.uid); }, [user.uid]);
   const [initial] = useState(() => getInitialDraft(user.uid));
   const [draft, setDraft] = useState<WorkspaceDraft>(initial.draft);
   const [savePaused, setSavePaused] = useState(!!initial.error);
@@ -124,7 +128,7 @@ export function Workspace({ user, credits, accountError = '' }: { user: User; cr
     if (directorActivity.hasUnsavedChanges) { setMessage('请先保存或取消分镜修改，再导出创作草稿。'); return; }
     downloadText(JSON.stringify(draftRef.current, null, 2), `CinePrompt-创作草稿-${new Date().toISOString().slice(0, 10)}.json`);
   };
-  const localWorkPending = directorActivity.busy || directorActivity.hasUnsavedChanges;
+  const localWorkPending = directorActivity.busy || directorActivity.hasUnsavedChanges || apiActivity.activeRequests > 0;
   const adoptStoredDraft = () => {
     if (localWorkPending) return;
     try {
@@ -184,7 +188,7 @@ export function Workspace({ user, credits, accountError = '' }: { user: User; cr
     <main id="workspace-content" className="flex min-w-0 flex-1 flex-col lg:overflow-hidden">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 sm:px-6 lg:px-8">
         <div><p className="text-sm font-medium">{stages.find(stage => stage.id === activeStage)?.label}</p><p role="status" className="mt-1 flex items-center gap-1.5 text-xs text-white/45">{isSaved && <CheckCircle2 className="size-3" />}{storageError || savePaused ? '草稿保存需要处理' : isSaved ? '本机草稿已保存' : '正在保存草稿…'}</p></div>
-        <div className="flex items-center gap-2"><button disabled={directorActivity.hasUnsavedChanges} onClick={exportDraft} className="flex min-h-10 items-center gap-2 rounded-lg border border-white/15 px-3 text-xs text-white/80 hover:bg-white/5 disabled:opacity-50"><Download className="size-4" />导出草稿</button><button ref={rechargeButtonRef} onClick={() => setRechargeOpen(true)} className="min-h-10 rounded-lg border border-white/15 px-3 text-xs text-white/60 hover:bg-white/5">试用额度 <span className="font-mono tabular-nums text-white">{credits === null ? '—' : credits.toLocaleString()}</span></button><button disabled={localWorkPending} onClick={() => { if (!localWorkPending) logOut().catch(() => setMessage('退出失败，请稍后重试。')); }} className="min-h-10 rounded-lg px-2 text-xs text-white/60 hover:text-white disabled:opacity-50">退出</button></div>
+        <div className="flex w-full min-w-0 max-w-full flex-wrap items-center gap-2 sm:w-auto"><ApiConnectionSettings uid={user.uid} busy={directorActivity.busy} /><button disabled={directorActivity.hasUnsavedChanges} onClick={exportDraft} className="flex min-h-10 items-center gap-2 rounded-lg border border-white/15 px-3 text-xs text-white/80 hover:bg-white/5 disabled:opacity-50"><Download className="size-4" />导出草稿</button><button ref={rechargeButtonRef} onClick={() => setRechargeOpen(true)} className="min-h-10 rounded-lg border border-white/15 px-3 text-xs text-white/60 hover:bg-white/5">试用额度 <span className="font-mono tabular-nums text-white">{credits === null ? '—' : credits.toLocaleString()}</span></button><button disabled={localWorkPending} onClick={() => { if (!localWorkPending) logOut().catch(() => setMessage('退出失败，请稍后重试。')); }} className="min-h-10 rounded-lg px-2 text-xs text-white/60 hover:text-white disabled:opacity-50">退出</button></div>
       </header>
       {(storageError || accountError || message) && <div role="alert" className="mx-4 mt-4 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm text-amber-100 sm:mx-6">{storageError || accountError || message}{storageError && <button onClick={openSettings} className="ml-3 underline">处理草稿保存</button>}</div>}
       {localWorkPending && <p role="status" className="mx-4 mt-3 text-pretty text-xs leading-6 text-white/60 sm:mx-6">{directorActivity.hasUnsavedChanges ? '有分镜修改尚未保存。请先保存或取消修改，再导出草稿或退出账号。' : '正在处理创作，请先停止生成或等待完成，再退出账号。'}</p>}
@@ -229,7 +233,15 @@ function VerifyEmail({ user }: { user: User }) {
 export default function App() {
   const [user, setUser] = useState<User | null>(null); const [isAuthReady, setIsAuthReady] = useState(false);
   const [credits, setCredits] = useState<number | null>(null); const [accountError, setAccountError] = useState('');
-  useEffect(() => onAuthStateChanged(auth, currentUser => { setUser(currentUser); setCredits(null); setAccountError(''); setIsAuthReady(true); }), []);
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, currentUser => {
+      setApiConnectionOwner(currentUser?.uid || null); setUser(currentUser); setCredits(null); setAccountError(''); setIsAuthReady(true);
+    });
+    const clearOnLeave = () => setApiConnectionOwner(null);
+    const resumePage = () => setApiConnectionOwner(auth.currentUser?.uid || null);
+    window.addEventListener('pagehide', clearOnLeave); window.addEventListener('pageshow', resumePage);
+    return () => { unsubscribe(); window.removeEventListener('pagehide', clearOnLeave); window.removeEventListener('pageshow', resumePage); setApiConnectionOwner(null); };
+  }, []);
   useEffect(() => {
     if (!user?.emailVerified) return;
     let active = true;

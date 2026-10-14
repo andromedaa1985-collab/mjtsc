@@ -1,3 +1,5 @@
+import { MAX_IMAGE_FILE_BYTES } from './requestBudget';
+
 /** Validate untrusted model output before replacing the user's working data. */
 const invalidResponse = 'AI 返回的数据格式不完整，当前内容已保留。请重试。';
 
@@ -84,7 +86,7 @@ export function errorMessage(error: unknown, fallback = '操作失败，当前�
 
 export function validateImageFile(file: Pick<File, 'type' | 'size'>) {
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) throw new Error('请选择 JPG、PNG 或 WebP 图片。');
-  if (!file.size || file.size > 5 * 1024 * 1024) throw new Error('请选择大小不超过 5 MB 的有效图片。');
+  if (!file.size || file.size > MAX_IMAGE_FILE_BYTES) throw new Error('请选择大小不超过 3 MB 的有效图片。');
 }
 
 export function readImageFile(file: File): Promise<string> {

@@ -215,7 +215,7 @@ export default function SinglePromptGenerator() {
                     className="w-full flex flex-col items-center justify-center gap-2 py-6 border border-dashed border-white/20 rounded-xl hover:border-white/40 hover:bg-white/5 transition-all text-white/40 hover:text-white/80"
                   >
                     <ImagePlus className="w-5 h-5" />
-                    <span className="text-xs font-mono">{isReadingImage ? '正在读取…' : '上传 JPG / PNG / WebP 图片（5 MB 以内）'}</span>
+                    <span className="text-xs font-mono">{isReadingImage ? '正在读取…' : '上传 JPG / PNG / WebP 图片（3 MB 以内）'}</span>
                   </button>
                 )}
               </div>

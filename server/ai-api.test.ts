@@ -1,7 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
-import { createAiRouter, validateDeepSeekInput, validateGeminiInput, ApiError } from './ai-api.ts';
+import { createAiRouter, validateDeepSeekInput, validateGeminiInput, normalizeDeepSeekBaseUrl, ApiError } from './ai-api.ts';
 
 type Dependencies = Parameters<typeof createAiRouter>[0];
 const deepSeekBody = { messages: [{ role: 'user', content: '生成一段剧本' }] };
@@ -81,7 +81,7 @@ test('valid authenticated requests preserve content and token usage', async (t) 
   const deepseek = await post('deepseek', deepSeekBody);
   const gemini = await post('gemini', { prompt: '图片' });
   assert.equal(deepseek.status, 200);
-  assert.deepEqual(deepseek.data, { content: '生成的剧本', usage: { total_tokens: 10 } });
+  assert.deepEqual(deepseek.data, { content: '生成的剧本', usage: { total_tokens: 10 }, billingSource: 'platform' });
   assert.equal(gemini.status, 200);
   assert.equal(gemini.data.content, '图片分析');
   assert.equal(calls.deepseek, 1);
@@ -130,6 +130,29 @@ test('DeepSeek validation defaults text output and bounds combined message size'
     messages: Array.from({ length: 3 }, () => ({ role: 'user', content: 'x'.repeat(100000) })),
   }), ApiError);
 });
+test('request keys and models are bounded and cannot silently fall back to platform credentials', () => {
+  for (const apiConfig of [null, {}, { apiKey: '' }, { apiKey: ' \t ' }, { apiKey: 'x'.repeat(513) }, { apiKey: 'private\nkey' }, { apiKey: 'private\u007fkey' }, { apiKey: 'key', model: '' }, { apiKey: 'key', model: 'gpt model' }, { apiKey: 'key', model: 'x'.repeat(129) }]) {
+    assert.throws(() => validateDeepSeekInput({ ...deepSeekBody, apiConfig }), error => error instanceof ApiError && error.code === 'INVALID_API_CONFIG');
+  }
+  const input = validateDeepSeekInput({ ...deepSeekBody, apiConfig: { apiKey: ` ${'x'.repeat(512)} `, model: ' ft:chat-model/version_1 ' } });
+  assert.equal(input.apiConfig!.apiKey.length, 512);
+  assert.equal(input.apiConfig!.model, 'ft:chat-model/version_1');
+  assert.equal(input.apiConfig!.baseUrl, 'https://api.deepseek.com/v1');
+  assert.throws(() => validateDeepSeekInput({ ...deepSeekBody, apiConfig: { apiKey: 'key', baseUrl: 'https://api.openai.com/v1' } }), error => error instanceof ApiError && error.code === 'INVALID_API_CONFIG');
+});
+test('provider bases use exact normalized HTTPS allowlists and Gemini remains fixed to official hosts', () => {
+  assert.equal(normalizeDeepSeekBaseUrl('https://api.deepseek.com/'), 'https://api.deepseek.com/v1');
+  assert.equal(normalizeDeepSeekBaseUrl('https://api.deepseek.com/v1/'), 'https://api.deepseek.com/v1');
+  assert.equal(normalizeDeepSeekBaseUrl('https://API.OPENAI.COM:443/v1/'), 'https://api.openai.com/v1');
+  assert.equal(normalizeDeepSeekBaseUrl('https://proxy.example/model/v1/', ['https://proxy.example/model/v1']), 'https://proxy.example/model/v1');
+  for (const base of ['https://api.openai.com', 'https://proxy.example/model/v1/chat/completions', 'https://api.deepseek.com/v1#token', 'https://api.deepseek.com/v1?token=x', 'https://user@api.deepseek.com/v1', 'http://api.deepseek.com/v1', 'https://api.openai.com:444/v1']) {
+    assert.throws(() => normalizeDeepSeekBaseUrl(base), error => error instanceof ApiError && error.code === 'INVALID_API_CONFIG');
+  }
+  const gemini = validateGeminiInput({ prompt: '图', apiConfig: { apiKey: 'request-key', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/', model: 'models/gemini-2.5-flash' } });
+  assert.equal(gemini.apiConfig!.baseUrl, 'https://generativelanguage.googleapis.com/v1beta');
+  assert.throws(() => validateGeminiInput({ prompt: '图', apiConfig: { apiKey: 'request-key', baseUrl: 'https://api.openai.com/v1' } }), error => error instanceof ApiError && error.code === 'INVALID_API_CONFIG');
+  assert.throws(() => normalizeDeepSeekBaseUrl('https://custom.example/v1', ['http://private-service/']), error => error instanceof ApiError && error.status === 503);
+});
 
 test('malformed JSON receives a JSON error', async (t) => {
   const { url } = await fixture(t);
@@ -156,6 +179,45 @@ test('provider errors never expose raw provider details', async (t) => {
   assert.equal(response.status, 502);
   assert.equal(response.data.code, 'AI_PROVIDER_ERROR');
   assert(!JSON.stringify(response.data).includes('secret-key'));
+});
+test('BYOK response content cannot echo its request credential even through an injected provider', async t => {
+  const apiKey = 'synthetic-client-credential';
+  const { post } = await fixture(t, {
+    generateDeepSeek: async () => ({ content: `上游回显 ${apiKey}`, usage: { total_tokens: 10 } }),
+    generateGemini: async () => ({ content: apiKey }),
+  });
+  for (const [route, body] of [['deepseek', deepSeekBody], ['gemini', { prompt: '图' }]] as const) {
+    const result = await post(route, { ...body, apiConfig: { apiKey } });
+    assert.equal(result.status, 502); assert.equal(result.data.code, 'AI_UNSAFE_RESPONSE');
+    assert.ok(!JSON.stringify(result.data).includes(apiKey));
+    assert.ok(!('content' in result.data));
+  }
+});
+test('unknown usage properties and invalid numeric counters never enter the response', async t => {
+  const apiKey = 'synthetic-client-credential';
+  const { post } = await fixture(t, {
+    generateDeepSeek: async () => ({ content: '正常正文', usage: { total_tokens: 10, prompt_tokens: 2, completion_tokens: 8,
+      prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 2, debugCredential: apiKey, raw: { apiKey }, invalid: 12 } }),
+    generateGemini: async () => ({ content: '正常图像说明', usage: { totalTokenCount: 8, promptTokenCount: -1,
+      candidatesTokenCount: 4, cachedContentTokenCount: 0, thoughtsTokenCount: Infinity, debugCredential: apiKey } }),
+  });
+  const deepseek = await post('deepseek', { ...deepSeekBody, apiConfig: { apiKey } });
+  assert.equal(deepseek.status, 200);
+  assert.deepEqual(deepseek.data.usage, { total_tokens: 10, prompt_tokens: 2, completion_tokens: 8, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 2 });
+  const gemini = await post('gemini', { prompt: '图', apiConfig: { apiKey } });
+  assert.deepEqual(gemini.data.usage, { totalTokenCount: 8, candidatesTokenCount: 4, cachedContentTokenCount: 0 });
+  assert.ok(!JSON.stringify([deepseek.data, gemini.data]).includes(apiKey));
+});
+test('arbitrary upstream error names and messages are absent from logger and response', async t => {
+  const apiKey = 'synthetic-private-error-name';
+  const logged: unknown[][] = [];
+  t.mock.method(console, 'error', (...values: unknown[]) => { logged.push(values); });
+  const { post } = await fixture(t, { generateDeepSeek: async () => { const error = new Error(apiKey); error.name = apiKey; throw error; } });
+  const result = await post('deepseek', { ...deepSeekBody, apiConfig: { apiKey } });
+  assert.equal(result.status, 502); assert.equal(result.data.code, 'AI_PROVIDER_ERROR');
+  assert.ok(logged.length > 0);
+  assert.ok(!JSON.stringify(logged).includes(apiKey));
+  assert.ok(!JSON.stringify(result.data).includes(apiKey));
 });
 
 test('empty provider results are rejected before returning success', async (t) => {

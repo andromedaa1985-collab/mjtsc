@@ -19,3 +19,20 @@ test('a truncated provider response is rejected even if its prefix happens to be
   assert.deepEqual(deepSeekResult({ choices: [{ finish_reason: 'stop', message: { content: '完整结果' } }], usage: { total_tokens: 10 } }), { content: '完整结果', usage: { total_tokens: 10 } });
   assert.throws(() => deepSeekResult(null), ApiError);
 });
+test('user model overrides the platform default but thinking fields stay exclusive to official DeepSeek', () => {
+  const official = deepSeekRequest({ ...input, apiConfig: { apiKey: 'dummy-user-key', model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com/v1' } }, { DEEPSEEK_MODEL: 'platform-model' });
+  assert.equal(official.model, 'deepseek-v4-pro'); assert.deepEqual(official.thinking, { type: 'disabled' });
+  const compatible = deepSeekRequest({ ...input, apiConfig: { apiKey: 'dummy-user-key', model: 'deepseek-flash', baseUrl: 'https://api.openai.com/v1' } }, {});
+  assert.equal(compatible.model, 'deepseek-flash'); assert.equal(compatible.thinking, undefined);
+  assert.ok(!JSON.stringify(compatible).includes('dummy-user-key'));
+  const fallback = deepSeekRequest({ ...input, apiConfig: { apiKey: 'dummy-user-key', baseUrl: 'https://api.deepseek.com/v1' } }, { DEEPSEEK_MODEL: 'configured-model' });
+  assert.equal(fallback.model, 'configured-model');
+});
+test('provider decoding rejects the actual credential in content and strips untrusted usage objects', () => {
+  const apiKey = 'synthetic-platform-credential';
+  assert.throws(() => deepSeekResult({ choices: [{ message: { content: `模型回显${apiKey}` } }] }, apiKey), error => error instanceof ApiError && error.code === 'AI_UNSAFE_RESPONSE');
+  const result = deepSeekResult({ choices: [{ message: { content: '正常正文' } }], usage: { total_tokens: 9,
+    completion_tokens: -1, prompt_tokens: NaN, prompt_cache_hit_tokens: 0, debugCredential: apiKey, object: { apiKey } } }, apiKey);
+  assert.deepEqual(result, { content: '正常正文', usage: { total_tokens: 9, prompt_cache_hit_tokens: 0 } });
+  assert.ok(!JSON.stringify(result).includes(apiKey));
+});

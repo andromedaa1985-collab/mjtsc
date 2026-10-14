@@ -2,17 +2,17 @@
 Set-Location -LiteralPath $PSScriptRoot
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Host '需要先安装 Node.js 22.18 或以上版本。建议 Node.js 24 LTS。'
+    Write-Host '需要先安装 Node.js 24 LTS。'
     exit 1
 }
 $cineNodeVersion = (& node -p 'process.versions.node').Trim().Split('.')
-if ([int]$cineNodeVersion[0] -lt 22 -or ([int]$cineNodeVersion[0] -eq 22 -and [int]$cineNodeVersion[1] -lt 18)) {
-    Write-Host 'Node.js 版本过旧，请升级到 22.18 或以上版本。'
+if ([int]$cineNodeVersion[0] -ne 24) {
+    Write-Host '当前软件使用 Node.js 24 LTS，请安装相同主版本。'
     exit 1
 }
 if (-not (Test-Path -LiteralPath '.env')) {
     Copy-Item -LiteralPath '.env.example' -Destination '.env'
-    Write-Host '已建立 .env 配置文件。请填写自己的 DEEPSEEK_API_KEY，然后重新运行。'
+    Write-Host '已建立 .env 配置文件。可填写服务端密钥，或保留占位值后重新运行，在界面 API 设置填写本次密钥。'
     Write-Host '自动创作使用 DeepSeek；图像分析工具另外需要 GEMINI_API_KEY。'
     exit 0
 }

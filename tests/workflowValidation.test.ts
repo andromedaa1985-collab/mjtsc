@@ -49,6 +49,7 @@ test('shot suggestions accept only the controls the user can actually select', (
 
 test('reference files reject unsupported formats and oversized payloads before reading', () => {
   validateImageFile({ type: 'image/png', size: 1024 });
+  validateImageFile({ type: 'image/png', size: 3 * 1024 * 1024 });
   assert.throws(() => validateImageFile({ type: 'image/svg+xml', size: 1024 }));
-  assert.throws(() => validateImageFile({ type: 'image/png', size: 6 * 1024 * 1024 }));
+  assert.throws(() => validateImageFile({ type: 'image/png', size: 3 * 1024 * 1024 + 1 }), /3 MB/);
 });

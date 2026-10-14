@@ -1,22 +1,31 @@
 import { db, auth, getAiRequestHeaders } from './firebase';
 import { doc, runTransaction } from 'firebase/firestore';
+import { beginApiConnectionRequest, waitForApiOperation } from './apiConnection';
+import { serializeAiRequest } from './requestBudget';
 
 export async function generateDeepSeekContent(prompt: string, isJson: boolean = false, signal?: AbortSignal) {
+  let request: ReturnType<typeof beginApiConnectionRequest> | undefined;
   try {
     const userId = auth.currentUser?.uid;
+    if (userId) request = beginApiConnectionRequest('text', userId);
+    const requestSignal = AbortSignal.any([...(request ? [request.signal] : []), AbortSignal.timeout(310000), ...(signal ? [signal] : [])]);
+    const headers = await waitForApiOperation(getAiRequestHeaders, requestSignal);
+    if (!userId || auth.currentUser?.uid !== userId) throw new Error('账号已切换，请重新发起生成。');
     const response = await fetch('/api/deepseek', {
       method: 'POST',
-      headers: await getAiRequestHeaders(),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(310000)]) : AbortSignal.timeout(310000),
-      body: JSON.stringify({
+      headers,
+      signal: requestSignal,
+      body: serializeAiRequest({
         messages: [
           { role: 'user', content: prompt }
         ],
-        responseFormat: isJson ? { type: 'json_object' } : { type: 'text' }
+        responseFormat: isJson ? { type: 'json_object' } : { type: 'text' },
+        ...(request.apiConfig ? { apiConfig: request.apiConfig } : {}),
       })
     });
 
     const data = await response.json().catch(() => null);
+    if (request.signal.aborted) throw new DOMException('账号已切换，请重新发起生成。', 'AbortError');
     if (!response.ok) {
       throw new Error(typeof data?.error === 'string' ? data.error : 'AI 服务暂时不可用，请稍后重试。');
     }
@@ -32,7 +41,7 @@ export async function generateDeepSeekContent(prompt: string, isJson: boolean = 
     }
 
     // Deduct credits automatically
-    if (userId && Number.isSafeInteger(usage?.total_tokens) && usage.total_tokens > 0) {
+    if (data.billingSource !== 'user' && auth.currentUser?.uid === userId && Number.isSafeInteger(usage?.total_tokens) && usage.total_tokens > 0) {
       try {
         const userRef = doc(db, 'users', userId);
         // Trial usage accounting only. Payment and billable quotas belong on a trusted server.
@@ -51,10 +60,10 @@ export async function generateDeepSeekContent(prompt: string, isJson: boolean = 
     return content;
   } catch (error) {
     if (signal?.aborted) throw new DOMException('生成已停止，已完成内容保留。', 'AbortError');
+    if (request?.signal.aborted) throw new DOMException('账号已切换，请重新发起生成。', 'AbortError');
     if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
       throw new Error('AI 响应超时，请稍后重试。');
     }
-    console.error('DeepSeek API call failed:', error);
     throw error;
-  }
+  } finally { request?.release(); }
 }
