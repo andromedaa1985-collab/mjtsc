@@ -184,7 +184,7 @@ export default function VideoPromptGeneration({ storyboards, setStoryboards, cha
             <div className="flex items-center justify-center w-8 h-8 rounded bg-white/10 border border-white/20 font-mono text-[10px] text-white">
               {activeShot.shotNumber}
             </div>
-            <h2 className="font-bold text-sm tracking-widest uppercase">SEEDANCE 2.0 提示词工作台</h2>
+            <h2 className="font-bold text-sm tracking-widest uppercase">Seedance 视频提示词工作台</h2>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <button
@@ -208,6 +208,7 @@ export default function VideoPromptGeneration({ storyboards, setStoryboards, cha
 
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col gap-6">
           {error && <p role="alert" className="rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">{error}</p>}
+          <p className="text-sm leading-6 text-white/60">这里只生成可复制的视频提示词。参考素材可以留空，整套流程无需生成或上传图片。</p>
           {/* Section 1: Original Reference */}
           <div className="p-5 rounded-xl bg-transparent border border-white/10">
             <h4 className="text-[10px] font-mono text-white/40 uppercase tracking-widest mb-3 flex items-center gap-2">
@@ -317,17 +318,17 @@ export default function VideoPromptGeneration({ storyboards, setStoryboards, cha
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest flex items-center gap-1.5"><ImageIcon className="w-3 h-3" /> 参考素材 (REFERENCE)</label>
+                <label className="text-[10px] font-mono text-white/40 uppercase tracking-widest flex items-center gap-1.5"><ImageIcon className="w-3 h-3" /> 参考素材（可选）</label>
                 <input 
                   type="text"
-                  aria-label="参考素材绑定"
+                  aria-label="参考素材绑定（可选）"
                   disabled={isBusy}
                   value={activeParams.reference}
                   onChange={(e) => handleParamChange(activeShotIndex, 'reference', e.target.value)}
-                  placeholder="例如：@图片1 作为首帧"
+                  placeholder="可留空；已有素材时填写实际引用编号"
                   className="w-full bg-transparent border border-white/10 rounded-lg px-3 py-2 text-xs text-white/90 focus:outline-none focus:border-white/30"
                 />
-                <p className="text-[10px] text-white/30 mt-1">支持 @图片、@视频 语法</p>
+                <p className="text-xs leading-5 text-white/50 mt-1">仅填写你已在目标平台上传并确认的素材编号；没有素材时直接生成文字提示词。</p>
               </div>
             </div>
           </div>

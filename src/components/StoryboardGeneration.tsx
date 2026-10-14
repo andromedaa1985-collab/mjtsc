@@ -98,12 +98,12 @@ export default function StoryboardGeneration({
       <div className="mb-6 flex flex-wrap justify-between items-end gap-4">
         <div>
           <h2 className="text-3xl sm:text-4xl font-bold text-balance mb-2">分镜序列</h2>
-          <p className="text-[10px] font-mono tracking-widest uppercase text-white/40 mt-1">检查拆分的分镜。您可以进行微调，确认无误后生成 Seedance 2.0 视频提示词。</p>
+          <p className="text-sm leading-6 text-white/60 mt-1">检查文字分镜，确认后继续生成视频提示词。无需生成分镜图片。</p>
         </div>
         <button
           onClick={onNext}
           disabled={isRefining}
-          className="flex items-center gap-2 px-8 py-3.5 rounded-full bg-white text-black font-bold hover:bg-white/90 transition-all text-xs tracking-widest uppercase"
+          className="flex min-h-11 items-center gap-2 px-8 py-3.5 rounded-full bg-white text-black font-bold hover:bg-white/90 transition-all text-xs tracking-widest uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
         >
           前往生成视频提示词
           <ArrowRight className="w-4 h-4" />

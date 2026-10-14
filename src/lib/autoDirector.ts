@@ -1,6 +1,7 @@
 import { buildVideoPrompt, checkPromptTimeline, SCRIPT_ANALYSIS_GUIDANCE, STORYBOARD_GUIDANCE } from './creativePrompts';
 import { parseAIJson } from './workflowValidation';
 import { buildDirectorMethodGuidance, getDirectorMethod, type DirectorMethodId } from './directorMethods';
+import { buildDirectorSourceUnits, resolveDirectorExcerptEnd } from './directorSource';
 import {
   DIRECTOR_REFERENCE_LABELS, DIRECTOR_REFERENCE_ROLES, DIRECTOR_STATE_LABELS, buildDirectorCopyPrompt,
   buildDirectorProductionContext, compareDirectorBoundaries, validateDirectorBoundary, validateDirectorProduction,
@@ -663,11 +664,16 @@ function understandingPrompt(state: DirectorCheckpoint): string {
 function storyboardPrompt(state: DirectorCheckpoint, chunk: DirectorChunk): string {
   const info = state.understanding!;
   const spans = dialogueSpans(state.sourceScript, info.characters.map(item => item.name));
+  const sourceUnits = buildDirectorSourceUnits(chunk);
+  const sourceTable = sourceUnits.map(unit => {
+    const words = dialogueWordCount(canonicalDialogue(state.sourceScript, chunk.start + unit.start, chunk.start + unit.end, spans));
+    return JSON.stringify({ id: unit.id, text: unit.text, dialogueCharacters: words, minimumSeconds: Math.max(4, Math.ceil(words / 4) + 1) });
+  }).join('\n');
   const enhanced = state.settings.creativeMethod === 'sijia-film';
   const craftSchema = enhanced ? ',"craft":{"emotionStart":"原文支持的起始可见情绪","emotionalTrigger":"本镜原文触发事件","emotionEnd":"结尾可见变化","spatialAnchor":"已有空间与人物落点","cameraPurpose":"观众在本镜需要发现什么","lightSoundCue":"沿原文与用户设置的光声线索"}' : '';
   const boundarySchema = ',"boundary":{"start":[],"end":[]}';
   const craftRequirement = enhanced ? '\n每镜必须返回craft的全部六个文字字段；不适用项可以为空字符串，不凑满、不凭空添加情绪转折或主观视觉变化。它记录导演意图，不能成为新增剧情、对白或素材上传状态的依据。' : '';
-  return `任务：把当前来源块完整变成分镜 [DIRECTOR_STORYBOARD]\n${authority}\n${STORYBOARD_GUIDANCE}\n${buildDirectorMethodGuidance(state.settings.creativeMethod, 'storyboard')}\n${capabilities}\n用户设置：${JSON.stringify(state.settings)}\n全局资产与剧情：${JSON.stringify(info)}\n当前块分析：${JSON.stringify(state.analyses.find(item => item.chunkId === chunk.id))}\n前镜交接（只承接，不重复演出）：${JSON.stringify(state.shots.at(-1) ? shotContext(state.shots.at(-1)!) : null)}\n下一来源块的事件（只预留落点，不提前拍）：${JSON.stringify(state.analyses[Number(chunk.id.split('-')[1])]?.beats || [])}\n当前块原文范围[${chunk.start},${chunk.end})：\n<source-script>\n${chunk.text}\n</source-script>\n本块权威对白（从原文直接提取；不可改写或删词）：\n${canonicalDialogue(state.sourceScript, chunk.start, chunk.end, spans) || '没有明确对白，不增加。'}\n按剧情需要决定镜数，不固定镜数。sourceExcerpt必须是连续、逐字、按顺序的原文切片：所有切片合起来必须完整覆盖本块，不能只摘首句、漏结尾或重复原文。可以把过长对白原句在自然停顿处分给相邻镜，绝不省字；按每秒3—4字另留至少1秒停顿/动作。每镜4到30秒整数。scene与charactersInvolved使用全局资产原名。程序从原文位置提取权威对白，JSON无需另输出dialogue，不要重复抄写对白增加输出负担。${craftRequirement}\n可选boundary用于起止状态，start/end可为空；每项为{"subject":"本镜主体原名或具体物件","field":"position/facing/leftHand/rightHand/objectState/movement/lighting/unfinishedAction之一","value":"可观察状态","provenance":"source或design","sourceExcerpt":"本镜原文短连续逐字依据"}。原文事实用source且逐字摘录依据；原文未给出的必要视觉安排用design，sourceExcerpt可空；未知不填，不把推断当事实。AI绝不能输出confirmed（只有用户能人工确认），不必为了填表增加动作。\n返回：{"shots":[{"scene":"资产场景名","charactersInvolved":["资产角色名"],"sourceExcerpt":"该镜完整连续原文","action":"主体、目标、动作过程与结果","camera":"一个主要观察意图与可见路径","durationSeconds":12,"continuity":"起点状态→结束状态"${craftSchema}${boundarySchema}}]}`;
+  return `任务：把当前来源块完整变成分镜 [DIRECTOR_STORYBOARD]\n${authority}\n${STORYBOARD_GUIDANCE}\n${buildDirectorMethodGuidance(state.settings.creativeMethod, 'storyboard')}\n${capabilities}\n用户设置：${JSON.stringify(state.settings)}\n全局资产与剧情：${JSON.stringify(info)}\n当前块分析：${JSON.stringify(state.analyses.find(item => item.chunkId === chunk.id))}\n前镜交接（只承接，不重复演出）：${JSON.stringify(state.shots.at(-1) ? shotContext(state.shots.at(-1)!) : null)}\n下一来源块的事件（只预留落点，不提前拍）：${JSON.stringify(state.analyses[Number(chunk.id.split('-')[1])]?.beats || [])}\n当前块原文范围[${chunk.start},${chunk.end})：\n<source-script>\n${chunk.text}\n</source-script>\n本块原文编号表（只返回编号范围，程序自行保存原文，不重抄）：\n${sourceTable}\n本块权威对白（从原文直接提取；不可改写或删词）：\n${canonicalDialogue(state.sourceScript, chunk.start, chunk.end, spans) || '没有明确对白，不增加。'}\n按剧情需要决定镜数，不固定镜数。每镜用sourceStartUnit和sourceEndUnit选择连续原文编号范围，结束编号包含在本镜内。第一镜从u1开始，下一镜从上一镜结束编号的下一个编号开始，最后一镜必须到${sourceUnits.at(-1)!.id}，不能遗漏、重复或倒序。编号是原文定位，不是镜数；可合并多个相邻编号成一个镜头。不要输出sourceExcerpt，不重抄或概括原文。程序从编号范围提取原文和对白。合并后的对白字数相加，每镜最多116字，时长至少为ceil(对白字数/4)+1秒；超过则拆为相邻镜头，不要强行合并。可以把过长对白原句在自然停顿处分给相邻镜，绝不省字；按每秒3—4字另留至少1秒停顿/动作。每镜4到30秒整数。scene与charactersInvolved使用全局资产原名。程序从原文位置提取权威对白，JSON无需另输出dialogue，不要重复抄写对白增加输出负担。${craftRequirement}\n可选boundary用于起止状态，start/end可为空；每项为{"subject":"本镜主体原名或具体物件","field":"position/facing/leftHand/rightHand/objectState/movement/lighting/unfinishedAction之一","value":"可观察状态","provenance":"source或design","sourceExcerpt":"本镜原文短连续逐字依据"}。原文事实用source且逐字摘录依据；原文未给出的必要视觉安排用design，sourceExcerpt可空；未知不填，不把推断当事实。AI绝不能输出confirmed（只有用户能人工确认），不必为了填表增加动作。\n返回：{"shots":[{"scene":"资产场景名","charactersInvolved":["资产角色名"],"sourceStartUnit":"u1","sourceEndUnit":"u1","action":"主体、目标、动作过程与结果","camera":"一个主要观察意图与可见路径","durationSeconds":12,"continuity":"起点状态→结束状态"${craftSchema}${boundarySchema}}]}`;
 }
 function shotContext(shot: DirectorShot) {
   return { id: shot.id, shotNumber: shot.shotNumber, scene: shot.scene, charactersInvolved: shot.charactersInvolved,
@@ -679,15 +685,29 @@ function parseStoryboard(data: Record<string, unknown>, state: DirectorCheckpoin
   if (!entries.length) invalid('当前原文块没有分镜，不能跳过。');
   const context = dialogueContext(state.sourceScript, state.understanding!.characters.map(item => item.name));
   const spans = context.spans;
+  const units = buildDirectorSourceUnits(chunk);
   let cursor = 0;
   const result = entries.map((item, index) => {
     const entry = record(item, '分镜');
     if (state.settings.creativeMethod === 'sijia-film' && entry.craft === undefined) invalid('研究方法分镜缺少craft导演工艺意图，必须提供全部六个文字字段；不适用项可为空。');
-    const excerpt = string(entry.sourceExcerpt, '分镜原文');
-    const found = chunk.text.indexOf(excerpt, cursor);
-    if (found < cursor || chunk.text.slice(cursor, found).trim()) invalid('分镜来源不是按顺序完整覆盖的原文，存在遗漏或改写。');
     const start = cursor;
-    const end = found + excerpt.length;
+    let end: number;
+    if (entry.sourceStartUnit !== undefined || entry.sourceEndUnit !== undefined) {
+      const firstId = string(entry.sourceStartUnit, `第${index + 1}镜原文起始编号`);
+      const lastId = string(entry.sourceEndUnit, `第${index + 1}镜原文结束编号`);
+      const first = units.find(unit => unit.id === firstId);
+      const last = units.find(unit => unit.id === lastId);
+      const expected = units.find(unit => unit.start === cursor);
+      if (!first || !last || first.start !== cursor || last.end <= first.start) {
+        invalid(`第${index + 1}镜原文编号范围${JSON.stringify([firstId, lastId])}无效，应从${expected?.id || '本块已覆盖完毕'}继续。编号必须按顺序连续覆盖，不能遗漏、重复、倒序或使用不存在的编号。`);
+      }
+      end = last.end;
+      if (entry.sourceExcerpt !== undefined && string(entry.sourceExcerpt, '分镜原文').replace(/\p{White_Space}/gu, '') !== chunk.text.slice(start, end).replace(/\p{White_Space}/gu, '')) {
+        invalid(`第${index + 1}镜的摘录与原文编号范围不一致；仅返回sourceStartUnit与sourceEndUnit，不重抄或改写原文。`);
+      }
+    } else {
+      end = resolveDirectorExcerptEnd(chunk.text, cursor, string(entry.sourceExcerpt, '分镜原文'), index + 1);
+    }
     cursor = end;
     const sourceStart = chunk.start + start;
     const sourceEnd = chunk.start + end;
@@ -700,7 +720,10 @@ function parseStoryboard(data: Record<string, unknown>, state: DirectorCheckpoin
     if (validated.boundary && [...validated.boundary.start, ...validated.boundary.end].some(item => item.provenance === 'confirmed')) invalid('AI不得将起止状态标为人工已确认；原文事实用source，视觉补充用design，未知项留空。');
     return validated;
   });
-  if (chunk.text.slice(cursor).trim()) invalid('当前块的尾部原文没有分镜，不能丢失长剧本后段。');
+  if (chunk.text.slice(cursor).trim()) {
+    const remaining = units.find(unit => unit.end > cursor);
+    invalid(`当前块的尾部原文没有分镜，不能丢失长剧本后段。请继续覆盖${remaining?.id || '剩余原文'}至${units.at(-1)!.id}；尚未覆盖：${JSON.stringify(chunk.text.slice(cursor, cursor + 100))}。`);
+  }
   const last = result.at(-1)!;
   last.sourceEnd = chunk.end;
   last.sourceExcerpt = state.sourceScript.slice(last.sourceStart, last.sourceEnd);

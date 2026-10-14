@@ -7,6 +7,7 @@ import {
 } from './autoDirector.ts';
 import { buildDirectorMethodGuidance, getDirectorMethod } from './directorMethods.ts';
 import { buildDirectorCopyPrompt, type DirectorProduction, type DirectorShotBoundary } from './directorProduction';
+import { buildDirectorSourceUnits } from './directorSource';
 
 const script = '室内，傍晚。\n李明：“你……真的回来了吗？”\n他握紧钥匙，在门边停住。';
 const settings = { ...defaultDirectorSettings, creativeMethod: 'standard' as const };
@@ -706,4 +707,134 @@ test('asset formatting recovery does not loosen source coverage or boundary evid
     start: [{ subject: '李明', field: 'rightHand', value: '钥匙', provenance: 'source', sourceExcerpt: '停在门边。右手握着钥匙。' }], end: [],
   };
   assert.throws(() => validateDirectorProject(changedBoundary), /状态原文依据必须逐字/);
+});
+
+function indexedStoryboardAI(change?: (shots: Record<string, unknown>[], prompt: string) => void) {
+  const ai = fakeAI();
+  const calls: string[] = [];
+  const generate: DirectorGenerate = async (prompt, json, signal) => {
+    calls.push(prompt);
+    if (!prompt.includes('[DIRECTOR_STORYBOARD]')) return ai.generate(prompt, json, signal);
+    const source = prompt.match(/<source-script>\n([\s\S]*?)\n<\/source-script>/)![1];
+    const units = buildDirectorSourceUnits({ id: 'chunk-1', start: 0, end: source.length, text: source });
+    const shots: Record<string, unknown>[] = units.map(unit => ({
+      scene: '室内', charactersInvolved: source.includes('李明') ? ['李明'] : [],
+      sourceStartUnit: unit.id, sourceEndUnit: unit.id,
+      action: '按本镜编号对应的原文事件推进', camera: '中景观察动作与反应',
+      durationSeconds: 30, continuity: '承接前镜并停在当前事件落点',
+    }));
+    change?.(shots, prompt);
+    return JSON.stringify({ shots });
+  };
+  return { generate, calls };
+}
+
+test('indexed storyboard preserves a 3192-character two-chunk script and original dialogue without copied excerpts', async () => {
+  const paragraph = '室内，雨夜。\r\n李明：“你在我身后的时候，我该回头看一眼的。”\r\n他把钥匙放在桌角，停下脚步。\r\n';
+  const source = paragraph.repeat(Math.floor(3192 / paragraph.length)) + '原文继续'.repeat(40).slice(0, 3192 % paragraph.length);
+  assert.equal(source.length, 3192);
+  const ai = indexedStoryboardAI();
+  const result = await runAutoDirector({ script: source, settings, generate: ai.generate });
+  assert.equal(chunkDirectorScript(source).length, 2);
+  assert.equal(result.shots.map(shot => shot.sourceExcerpt).join(''), source);
+  for (const shot of result.shots) assert.equal(shot.sourceExcerpt, source.slice(shot.sourceStart, shot.sourceEnd));
+  const spoken = result.shots.map(shot => shot.dialogue.replace(/^李明：/gm, '')).filter(Boolean).join('');
+  assert.equal(spoken, '你在我身后的时候，我该回头看一眼的。'.repeat(Math.floor(3192 / paragraph.length)));
+  const storyboards = ai.calls.filter(call => call.includes('[DIRECTOR_STORYBOARD]'));
+  assert.equal(storyboards.length, 2);
+  assert.ok(storyboards.every(prompt => prompt.includes('"sourceStartUnit":"u1"') && prompt.includes('dialogueCharacters') && prompt.includes('不重抄或概括原文')));
+  assert.equal(validateDirectorProject(JSON.parse(JSON.stringify(result))).shots.length, result.shots.length);
+});
+
+test('indexed ranges can merge adjacent source units into one intentional shot', async () => {
+  const ai = indexedStoryboardAI(shots => {
+    const first = shots[0]; first.sourceEndUnit = shots.at(-1)!.sourceEndUnit;
+    shots.splice(1);
+  });
+  const result = await runAutoDirector({ script, settings, generate: ai.generate });
+  assert.equal(result.shots.length, 1);
+  assert.equal(result.shots[0].sourceExcerpt, script);
+  assert.equal(result.shots[0].dialogue, '李明：你……真的回来了吗？');
+});
+
+test('indexed references work with the default research method and its required camera and performance intentions', async () => {
+  const ai = indexedStoryboardAI(shots => { for (const shot of shots) shot.craft = researchedCraft; });
+  const result = await runAutoDirector({ script, settings: defaultDirectorSettings, generate: ai.generate });
+  assert.equal(result.shots.map(shot => shot.sourceExcerpt).join(''), script);
+  assert.ok(result.shots.every(shot => shot.craft?.cameraPurpose === researchedCraft.cameraPurpose));
+  assert.ok(result.shots.every(shot => shot.masterPrompt));
+});
+
+test('indexed storyboard rejects skipped, repeated, reversed, unknown and half-present ranges without committing shots', async () => {
+  const source = '室内。李明停住。门关上。';
+  const changes = [
+    (shots: Record<string, unknown>[]) => { shots.splice(1, 1); },
+    (shots: Record<string, unknown>[]) => { shots[1].sourceStartUnit = 'u1'; },
+    (shots: Record<string, unknown>[]) => { shots[0].sourceStartUnit = 'u2'; shots[0].sourceEndUnit = 'u1'; },
+    (shots: Record<string, unknown>[]) => { shots[0].sourceEndUnit = 'u999'; },
+    (shots: Record<string, unknown>[]) => { delete shots[0].sourceEndUnit; shots[0].sourceExcerpt = source; },
+  ];
+  for (const change of changes) {
+    let checkpoint: DirectorCheckpoint | undefined;
+    const ai = indexedStoryboardAI(change);
+    await assert.rejects(runAutoDirector({ script: source, settings, generate: ai.generate, onCheckpoint: value => { checkpoint = value; } }), /AI数据校验失败/);
+    assert.equal(ai.calls.filter(call => call.includes('[DIRECTOR_STORYBOARD]')).length, 2);
+    assert.equal(checkpoint!.shots.length, 0);
+    assert.ok(checkpoint!.understanding);
+  }
+});
+
+test('indexed storyboard requires the final source unit and rejects a conflicting extra excerpt', async () => {
+  for (const change of [
+    (shots: Record<string, unknown>[]) => { shots.pop(); },
+    (shots: Record<string, unknown>[]) => { shots[0].sourceExcerpt = '室外，下雪。'; },
+  ]) {
+    const ai = indexedStoryboardAI(change);
+    await assert.rejects(runAutoDirector({ script, settings, generate: ai.generate }), /尾部原文|摘录与原文编号范围不一致/);
+  }
+});
+
+test('legacy storyboard recovers only changed whitespace and stores the exact original source and dialogue', async () => {
+  const source = '室内。\r\n李明：“你……\u3000真的回来了吗？”\r\n他握紧钥匙。';
+  const ai = fakeAI({ splitLines: true });
+  const generate: DirectorGenerate = async (prompt, json, signal) => {
+    const response = await ai.generate(prompt, json, signal);
+    if (!prompt.includes('[DIRECTOR_STORYBOARD]')) return response;
+    const data = JSON.parse(response);
+    for (const shot of data.shots) shot.sourceExcerpt = shot.sourceExcerpt.replace(/\p{White_Space}/gu, '');
+    return JSON.stringify(data);
+  };
+  const result = await runAutoDirector({ script: source, settings, generate });
+  assert.equal(result.shots.map(shot => shot.sourceExcerpt).join(''), source);
+  assert.equal(result.shots[1].dialogue, '李明：你……\u3000真的回来了吗？');
+  assert.equal(ai.calls.filter(call => call.includes('[DIRECTOR_STORYBOARD]')).length, 1);
+});
+
+test('legacy excerpt recovery never fills gaps, changes punctuation or drops a repeated source event', async () => {
+  const source = '室内。李明停住。门关上。门关上。';
+  const bad = ['室内。门关上。门关上。', '室内。李明站住。门关上。门关上。', '室内,李明停住。门关上。门关上。', '室内。李明停住。门关上。'];
+  for (const sourceExcerpt of bad) {
+    const base = fakeAI();
+    const generate: DirectorGenerate = async (prompt, json, signal) => prompt.includes('[DIRECTOR_STORYBOARD]')
+      ? JSON.stringify({ shots: [{ scene: '室内', charactersInvolved: ['李明'], sourceExcerpt, action: '按原文推进', camera: '中景', durationSeconds: 30, continuity: '同一位置' }] })
+      : base.generate(prompt, json, signal);
+    await assert.rejects(runAutoDirector({ script: source, settings, generate }), /遗漏|改写|尾部原文/);
+  }
+});
+
+test('failed later indexed chunk preserves earlier storyboard and resumes without replaying analysis or successful shots', async () => {
+  const source = '室内。' + '李明走向门边，停下脚步。\r\n'.repeat(250);
+  let checkpoint: DirectorCheckpoint | undefined;
+  const broken = indexedStoryboardAI((shots, prompt) => { if (!prompt.includes('当前块原文范围[0,')) shots[0].sourceStartUnit = 'u999'; });
+  await assert.rejects(runAutoDirector({ script: source, settings, generate: broken.generate, onCheckpoint: value => { checkpoint = value; } }), /原文编号范围/);
+  assert.equal(checkpoint!.shots.at(-1)!.sourceEnd, checkpoint!.chunks[0].end);
+  const preserved = JSON.stringify(checkpoint!.shots);
+  const resumed = indexedStoryboardAI();
+  const result = await runAutoDirector({ script: source, settings, generate: resumed.generate, checkpoint });
+  assert.ok(resumed.calls.every(prompt => !prompt.includes('[DIRECTOR_ANALYSIS]') && !prompt.includes('[DIRECTOR_UNDERSTANDING]')));
+  assert.ok(!resumed.calls.some(prompt => prompt.includes('[DIRECTOR_STORYBOARD]') && prompt.includes('当前块原文范围[0,')));
+  const generatedFields = ({ masterPrompt, postProductionNotes, qaWarnings, ...shot }: DirectorProject['shots'][number]) => shot;
+  assert.deepEqual(result.shots.slice(0, checkpoint!.shots.length).map(generatedFields), checkpoint!.shots.map(generatedFields));
+  assert.equal(JSON.stringify(checkpoint!.shots), preserved, 'resuming does not mutate the caller checkpoint');
+  assert.equal(result.shots.map(shot => shot.sourceExcerpt).join(''), source);
 });

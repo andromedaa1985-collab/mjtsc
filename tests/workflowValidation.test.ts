@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseCharactersAndScenes, parseStoryboards, parseVideoPrompt, parsePromptReview, parseShotSuggestions, validateImageFile } from '../src/lib/workflowValidation.ts';
+import { emptyDraft, loadDraft, saveDraft } from '../src/lib/workspaceDraft.ts';
 
 test('model output must have complete character and scene structures before replacing a draft', () => {
   const character = { name: '林月', description: '青衣少女', keywords: ['青衣'], imagenPrompt: 'Character reference' };
@@ -18,6 +19,21 @@ test('storyboard numbering is continuous across chunks and retains exact dialogu
   assert.equal(result[0].sourceExcerpt, shot.sourceExcerpt);
   assert.throws(() => parseStoryboards('{"storyboards":[]}'));
   assert.throws(() => parseStoryboards(JSON.stringify({ storyboards: [{ ...shot, charactersInvolved: '林月' }] })));
+});
+
+test('optional image prompts do not block text settings and survive account draft restoration', () => {
+  const character = { name: '林月', description: '青衣少女', keywords: ['青衣'] };
+  const scene = { name: '宫门', description: '她停在门口', keywords: ['木门'], imagenPrompt: '' };
+  const assets = parseCharactersAndScenes(JSON.stringify({ characters: [character], scenes: [scene] }));
+  assert.equal(assets.characters[0].imagenPrompt, '');
+  assert.equal(assets.scenes[0].imagenPrompt, '');
+  const values = new Map<string, string>();
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+  const draft = { ...emptyDraft, currentStage: 'characters' as const, charactersAndScenes: assets };
+  assert.equal(saveDraft(storage, 'text-only', draft), '');
+  assert.deepEqual(loadDraft(storage, 'text-only').draft.charactersAndScenes, assets);
+  assert.throws(() => parseCharactersAndScenes(JSON.stringify({ characters: [{ ...character, imagenPrompt: { prompt: 'bad' } }], scenes: [] })));
+  assert.throws(() => parseCharactersAndScenes(JSON.stringify({ characters: [{ ...character, description: '' }], scenes: [] })));
 });
 
 test('legacy storyboard responses remain readable without optional creative context', () => {

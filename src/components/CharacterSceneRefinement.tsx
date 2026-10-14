@@ -3,8 +3,9 @@ import { motion } from 'motion/react';
 import { Users, Map, Send, Loader2, CheckCircle2, ImagePlus, X, Copy, Check } from 'lucide-react';
 import { SCRIPT_ANALYSIS_GUIDANCE, STORYBOARD_GUIDANCE } from '../lib/creativePrompts';
 import { generateGeminiContent } from '../lib/gemini';
-import { errorMessage, parseCharactersAndScenes, parseStoryboards, readImageFile } from '../lib/workflowValidation';
+import { errorMessage, parseStoryboards, readImageFile } from '../lib/workflowValidation';
 import { generateDeepSeekContent } from '../lib/deepseek';
+import { refineCharacterSceneSettings } from '../lib/assetRefinement';
 
 interface CharacterSceneRefinementProps {
   scriptData: string;
@@ -70,7 +71,7 @@ export default function CharacterSceneRefinement({
 
     setIsRefining(true);
     try {
-      const promptText = `你是顶级影视视效总监和专业的 Nano Banana Pro 提示词工程师。
+      const promptText = `你是影视美术设计师，请按反馈调整人物和场景的文字设定。
       ${SCRIPT_ANALYSIS_GUIDANCE}
       当前的人物和场景：
       ${JSON.stringify(charactersAndScenes, null, 2)}
@@ -79,16 +80,19 @@ export default function CharacterSceneRefinement({
       ${feedback || "请参考提供的图片，提取其视觉特征（如人物长相、服装风格、场景氛围等），并更新当前的人物和场景设定。"}
 
       只修改用户反馈指定的人物或场景，其余设定与原名保持一致。如果提供参考图，按用户指定的职责提取视觉特征，不混入参考排版。
-      同时更新相关imagenPrompt，写清具体材质、造型、空间和主光，不堆砌画质词。人物参考图与无人物场景图保持用途清楚。
-      请用中文输出基础信息，但 imagenPrompt 的值必须使用英文，且必须是包含 [VARIABLES] 和 [EXECUTION] 的单行或多行字符串。
+      imagenPrompt只是可选的参考图提示词；已有提示词仅在对应设定改变时更新，未提供或不需要时返回空字符串。文字设定应独立完整，不依赖生成图片。
+      如果填写imagenPrompt，写清具体材质、造型、空间和主光，不堆砌画质词。人物参考图与无人物场景图保持用途清楚。
+      请用中文输出基础信息，非空 imagenPrompt 使用英文，包含 [VARIABLES] 和 [EXECUTION]。
       格式为JSON，结构如下：
       {
         "characters": [{ "name": "...", "description": "...", "keywords": ["..."], "imagenPrompt": "[VARIABLES]\\nSUBJECT = \\"...\\"\\nLOCATION = \\"...\\"\\nLIGHTING = \\"...\\"\\nCAM_SETTINGS = \\"...\\"\\n[EXECUTION]\\n..." }],
         "scenes": [{ "name": "...", "description": "...", "keywords": ["..."], "imagenPrompt": "[VARIABLES]\\nSUBJECT = \\"...\\"\\nLOCATION = \\"...\\"\\nLIGHTING = \\"...\\"\\nCAM_SETTINGS = \\"...\\"\\n[EXECUTION]\\n..." }]
       }`;
 
-      const responseText = await generateGeminiContent(promptText, referenceImage?.data, referenceImage?.mimeType);
-      const refined = parseCharactersAndScenes(responseText);
+      const refined = await refineCharacterSceneSettings(promptText, referenceImage, {
+        text: generateDeepSeekContent,
+        vision: generateGeminiContent,
+      });
       if (latestSourceRef.current.charactersAndScenes !== charactersAndScenes || latestSourceRef.current.scriptData !== scriptData) throw new Error('剧本或设定已更新，本次微调未覆盖当前内容。请重新提交。');
       setCharactersAndScenes(refined);
       setFeedback('');
@@ -221,9 +225,10 @@ export default function CharacterSceneRefinement({
     if (!promptObj) return null;
     const jsonString = typeof promptObj === 'string' ? promptObj : JSON.stringify(promptObj, null, 2);
     return (
-      <div className="mt-4">
+      <details className="mt-4 rounded-xl border border-white/10 p-3">
+        <summary className="min-h-11 cursor-pointer rounded-lg py-2 text-sm text-white/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/50">参考图提示词（可选）</summary>
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-white/40 uppercase tracking-wider font-semibold">Nano Banana Pro Prompt</span>
+          <span className="text-xs text-white/50">按需复制到生图工具</span>
           <button
             onClick={() => handleCopy(jsonString)}
             className="flex items-center gap-1 text-xs text-white/40 hover:text-white transition-colors bg-white/5 px-2 py-1 rounded"
@@ -235,7 +240,7 @@ export default function CharacterSceneRefinement({
         <pre className="p-3 rounded-xl bg-black/40 border border-white/5 font-mono text-xs text-white/80 leading-relaxed whitespace-pre-wrap break-words">
           {jsonString}
         </pre>
-      </div>
+      </details>
     );
   };
 
@@ -249,28 +254,31 @@ export default function CharacterSceneRefinement({
       <div className="mb-6 flex flex-wrap justify-between items-end gap-4">
         <div>
           <h2 className="text-3xl sm:text-4xl font-bold text-balance mb-2">元素微调</h2>
-          <p className="text-[10px] font-mono tracking-widest uppercase text-white/40 mt-1">在生成分镜前，检查并微调提取出的人物和场景设定。支持上传垫图进行多模态参考。</p>
+          <p className="text-sm leading-6 text-white/60 mt-1">检查人物与场景的文字设定后，可直接生成分镜。无需生成或上传图片。</p>
         </div>
         <button
           onClick={handleGenerateStoryboards}
           disabled={isBusy}
-          className="flex items-center gap-2 px-8 py-3.5 rounded-full bg-white text-black font-bold hover:bg-white/90 disabled:opacity-50 transition-all text-xs tracking-widest uppercase"
+          aria-describedby="character-text-workflow-help"
+          className="flex min-h-11 items-center gap-2 px-8 py-3.5 rounded-full bg-white text-black font-bold hover:bg-white/90 disabled:opacity-50 transition-all text-xs tracking-widest uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
         >
           {isGeneratingStoryboards ? (
             <>
               <Loader2 className="w-4 h-4 animate-spin" />
               {generationProgress.total > 0
                 ? `生成分镜中 (${generationProgress.current}/${generationProgress.total})...`
-                : '确认并生成分镜'}
+                : '直接生成文字分镜'}
             </>
           ) : (
             <>
               <CheckCircle2 className="w-4 h-4" />
-              确认并生成分镜
+              直接生成文字分镜
             </>
           )}
         </button>
       </div>
+
+      <p id="character-text-workflow-help" className="mb-5 text-sm leading-6 text-white/60">文字解析、文字微调、分镜和视频提示词均使用文本 API。参考图只在你主动添加并提交时使用附图接口，不影响进入下一步。</p>
 
       {error && <p role="alert" className="mb-4 rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">{error}</p>}
       <div className="flex-1 grid grid-cols-1 xl:grid-cols-2 gap-6 min-h-0">
@@ -322,13 +330,13 @@ export default function CharacterSceneRefinement({
         {/* Refinement Chat */}
         <div className="flex flex-col rounded-2xl border border-white/10 bg-transparent overflow-hidden">
           <div className="p-4 border-b border-white/10 bg-transparent">
-            <h3 className="text-[10px] font-mono tracking-widest uppercase text-white/40">[ AI 多模态微调助手 ]</h3>
+            <h3 className="text-sm text-white/60">人物与场景文字微调 · 参考图可选</h3>
           </div>
 
           <div className="flex-1 p-6 overflow-y-auto flex flex-col justify-end">
             <div className="bg-white/5 border border-white/10 rounded-xl p-4 w-5/6 mb-4">
               <p className="text-sm text-white/80 leading-relaxed">
-                我已经提取了人物和场景。您需要做任何调整吗？您可以直接上传参考图（垫图），我会根据图片风格为您修改设定！
+                可以直接输入文字调整意见，也可以跳过微调，点击“直接生成文字分镜”。如需参考图片，再主动添加即可。
               </p>
             </div>
           </div>
@@ -355,14 +363,15 @@ export default function CharacterSceneRefinement({
                 onChange={handleImageUpload}
                 className="hidden"
                 id="image-upload"
+                aria-label="可选的人物与场景参考图片"
                 ref={fileInputRef}
               />
               <button type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isBusy}
-                aria-label="上传参考图"
+                aria-label="添加参考图（可选）"
                 className="cursor-pointer p-3 rounded-xl bg-transparent hover:bg-white/5 border border-white/10 text-white/40 hover:text-white transition-colors"
-                title="上传参考图 (垫图)"
+                title="添加参考图（可选，不影响下一步）"
               >
                 <ImagePlus className="w-5 h-5" />
               </button>
@@ -373,7 +382,7 @@ export default function CharacterSceneRefinement({
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && handleRefine()}
-                placeholder="告诉 AI 如何调整，或直接发送图片..."
+                placeholder="用文字描述需要调整的人物或场景…"
                 className="flex-1 bg-transparent border border-white/10 rounded-xl py-3 pl-4 pr-12 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-white/30 transition-colors"
               />
               <button

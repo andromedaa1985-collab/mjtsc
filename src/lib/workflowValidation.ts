@@ -40,7 +40,9 @@ export function parseCharactersAndScenes(response: string) {
     if (!Array.isArray(value)) throw new Error(invalidResponse);
     return value.map(item => {
       const entry = object(item);
-      return { name: text(entry.name), description: text(entry.description), keywords: strings(entry.keywords), imagenPrompt: text(entry.imagenPrompt) };
+      // Image prompts are optional authoring aids, not a prerequisite for text storyboards.
+      if (entry.imagenPrompt !== undefined && entry.imagenPrompt !== null && typeof entry.imagenPrompt !== 'string') throw new Error(invalidResponse);
+      return { name: text(entry.name), description: text(entry.description), keywords: strings(entry.keywords), imagenPrompt: typeof entry.imagenPrompt === 'string' ? entry.imagenPrompt.trim() : '' };
     });
   };
   const characters = parseElements(data.characters);

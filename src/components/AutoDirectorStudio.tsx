@@ -602,7 +602,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
         <div>
           <p className="mb-3 flex items-center gap-2 text-xs font-medium text-amber-200"><Clapperboard className="size-4" aria-hidden="true" />CinePrompt · 自动导演</p>
           <h1 className="text-balance text-3xl font-semibold sm:text-4xl">从一份剧本，到可用的分镜草案。</h1>
-          <p className="mt-3 max-w-2xl text-pretty text-sm leading-7 text-zinc-400">贴入故事，一次整理故事理解、人物场景、分镜与逐镜提示词。你可以继续修改每一镜。</p>
+          <p className="mt-3 max-w-2xl text-pretty text-sm leading-7 text-zinc-400">贴入故事，一次整理故事理解、人物场景、分镜与逐镜提示词。全程只生成文字，无需生成或上传图片。你可以继续修改每一镜。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <input ref={restoreInput} type="file" accept=".json,application/json" className="hidden" disabled={busy} aria-label="选择已导出的创作项目" onChange={event => {
@@ -614,7 +614,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
       </header>
 
       {(error || notice) && <div className="mb-6" aria-live="polite" aria-atomic="true">
-        {error ? <p role="alert" className="flex items-start gap-3 rounded-xl border border-red-400/25 bg-red-400/5 p-4 text-pretty text-sm leading-7 text-red-200"><AlertCircle className="mt-1 size-4 shrink-0" aria-hidden="true" /><span>{error}</span></p>
+        {error ? <div role="alert" className="rounded-xl border border-red-400/25 bg-red-400/5 p-4 text-pretty text-sm leading-7 text-red-200"><p className="flex items-start gap-3"><AlertCircle className="mt-1 size-4 shrink-0" aria-hidden="true" /><span>{error}</span></p>{checkpoint && !busy && canResume && <button type="button" disabled={hasUnsavedChanges} onClick={() => { void run(true); }} className={cn(secondaryButtonClass, 'mt-3')}><RotateCcw className="size-4" aria-hidden="true" />继续未完成的文字制作</button>}</div>
           : <p role="status" className="text-pretty text-sm leading-7 text-zinc-300">{notice}</p>}
       </div>}
       {restoreSnapshot && !busy && <button type="button" disabled={hasUnsavedChanges} className={cn(secondaryButtonClass, 'mb-6')} onClick={() => {
@@ -643,7 +643,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
               {checkpoint && !busy && <button type="button" disabled={!canResume || hasUnsavedChanges} onClick={() => { void run(true); }} className={cn(secondaryButtonClass, 'w-full')}><RotateCcw className="size-4" aria-hidden="true" />从中断处继续</button>}
               {hasUnsavedChanges && <p className="text-pretty text-xs leading-6 text-amber-100">有分镜、状态或制作资料尚未保存。请在对应编辑区保存或取消。</p>}
               {checkpoint && !canResume && !busy && <p className="text-pretty text-xs leading-6 text-zinc-500">原文或设置与上次不同。请开始新一轮，现有结果会保留。</p>}
-              <p className="text-pretty text-xs leading-6 text-zinc-500">长剧本会分段处理。停止或遇到错误时，已完成的步骤会保留，可稍后继续。</p>
+              <p className="text-pretty text-xs leading-6 text-zinc-500">只需要文本 API。图片和素材绑定均为可选，不影响分镜与提示词生成。长剧本会分段处理，已完成的步骤会保留。</p>
             </div>
           </ScriptPanel>
         </div>
@@ -718,7 +718,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
               })}
               {!!displayProject.shots.length && !filteredShots.length && <p className="py-6 text-pretty text-sm leading-7 text-zinc-400">{shotFilter === 'pending' && !search ? '当前没有待更新的镜头。' : shotFilter === 'edited' && !search ? '当前没有未保存的分镜修改。' : '没有找到匹配的镜头，请调整关键词或清除筛选。'}</p>}
               <ShotPagination page={currentPage} pages={pageCount} disabled={hasBoundaryChanges} onChange={setShotPage} />
-              {!displayProject.shots.length && <p className="py-6 text-sm text-zinc-500">分镜尚未完成，可从中断处继续制作。</p>}
+              {!displayProject.shots.length && <div className="space-y-3 py-6"><p className="text-pretty text-sm leading-7 text-zinc-400">人物与场景已整理，文字分镜尚未完成。无需先生成图片，继续完成分镜即可编写提示词。</p>{checkpoint && canResume && <button type="button" disabled={busy || hasUnsavedChanges} onClick={() => { void run(true); }} className={secondaryButtonClass}><ArrowRight className="size-4" aria-hidden="true" />继续生成文字分镜</button>}</div>}
             </section>
           </div>}
         </div>
