@@ -27,7 +27,7 @@ test('compiled API imports JavaScript modules and starts without provider creden
     }
     await copyFile(path.join(root, 'firebase-applet-config.json'), path.join(temporary, 'firebase-applet-config.json'));
     // Run emitted files in plain Node, without the test runner's TS resolver.
-    await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+    await promisify(execFile)(process.execPath, ['--no-experimental-require-module', '--input-type=module', '-e', `
       import assert from 'node:assert/strict';
       const { default: app } = await import(process.argv[1]);
       const server = app.listen(0, '127.0.0.1');
