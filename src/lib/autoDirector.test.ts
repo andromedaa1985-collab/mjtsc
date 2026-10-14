@@ -6,6 +6,7 @@ import {
   type DirectorCheckpoint, type DirectorGenerate, type DirectorProject, type DirectorShotCraft,
 } from './autoDirector.ts';
 import { buildDirectorMethodGuidance, getDirectorMethod } from './directorMethods.ts';
+import { buildDirectorCopyPrompt, type DirectorProduction, type DirectorShotBoundary } from './directorProduction';
 
 const script = '室内，傍晚。\n李明：“你……真的回来了吗？”\n他握紧钥匙，在门边停住。';
 const settings = { ...defaultDirectorSettings, creativeMethod: 'standard' as const };
@@ -545,4 +546,164 @@ test('markdown separates copyable text from postproduction and keeps authoritati
   assert.ok(!copyBlock.includes('检查镜间曝光'));
   assert.ok(markdown.includes('后期建议（不属于提示词正文）'));
   assert.ok(markdown.includes(script));
+});
+
+function productionFixture(project: DirectorProject): DirectorProduction {
+  return { assets: [{ id: 'look-1', assetName: '室内光色参考', role: 'look', identityGroup: '', sourceLabel: '光色参考.png', sourceUrl: 'https://private.example.test/color.png',
+    instruction: '只参考冷暖关系和材质，不改变人物', exclusions: '不采用人物、构图和字幕', shotIds: project.shots.map(shot => shot.id),
+    binding: { platform: 'jimeng', mediaType: 'image', slot: 4, confirmed: true } }],
+    sceneLooks: [{ scene: '室内', mainLight: '左侧窗光', quality: '柔和漫射', environmentColor: '低饱和冷灰', subjectColor: '', accentColor: '', contrast: '暗部可辨', allowedChanges: '没有原文触发时保持光源稳定' }] };
+}
+function checkpointFromProject(project: DirectorProject): DirectorCheckpoint {
+  return { version: 1, sourceScript: project.sourceScript, settings: project.settings, chunks: chunkDirectorScript(project.sourceScript),
+    analyses: [{ chunkId: 'chunk-1', summary: '按原文分析', beats: ['依次发生原文事件'], characters: project.understanding.characters, scenes: project.understanding.scenes, continuityRules: [], uncertainties: [] }],
+    understanding: project.understanding, shots: project.shots, completedPromptShotIds: project.shots.filter(shot => shot.masterPrompt).map(shot => shot.id),
+    ...(project.production ? { production: project.production } : {}) };
+}
+const designBoundary = (value = '半开'): DirectorShotBoundary => ({ start: [{ subject: '门', field: 'objectState', value, provenance: 'design', sourceExcerpt: '' }], end: [] });
+
+test('a paraphrased asset excerpt gets one targeted repair with the asset name and a real contiguous source example', async () => {
+  const ai = fakeAI(); const requests: string[] = []; let attempts = 0;
+  const generate: DirectorGenerate = async (prompt, json, signal) => {
+    requests.push(prompt);
+    const response = await ai.generate(prompt, json, signal);
+    if (prompt.includes('[DIRECTOR_ANALYSIS]') && ++attempts === 1) {
+      const data = JSON.parse(response); data.characters[0].sourceExcerpt = '李明在傍晚与归来者谈话'; return JSON.stringify(data);
+    }
+    return response;
+  };
+  const project = await runAutoDirector({ script, settings, generate });
+  assert.equal(attempts, 2);
+  const repair = requests.filter(prompt => prompt.includes('[DIRECTOR_ANALYSIS]'))[1];
+  assert.match(repair, /唯一一次结构修复/); assert.match(repair, /角色 "李明"/);
+  assert.match(repair, /李明在傍晚与归来者谈话/); assert.match(repair, /短连续摘录/);
+  assert.ok(repair.includes(JSON.stringify(script)), 'repair includes a real source slice instead of silently substituting the name');
+  assert.equal(project.understanding.characters[0].sourceExcerpt, '李明');
+});
+
+test('two invalid merged excerpts fail without inventing evidence and preserve the successful analysis checkpoint', async () => {
+  const ai = fakeAI(); let attempts = 0; let checkpoint: DirectorCheckpoint | undefined;
+  const generate: DirectorGenerate = async (prompt, json, signal) => {
+    const response = await ai.generate(prompt, json, signal);
+    if (prompt.includes('[DIRECTOR_UNDERSTANDING]')) {
+      attempts++; const data = JSON.parse(response); data.characters[0].sourceExcerpt = '李明没有出现在这段概括的原文里'; return JSON.stringify(data);
+    }
+    return response;
+  };
+  await assert.rejects(runAutoDirector({ script, settings, generate, onCheckpoint: value => { checkpoint = value; } }), /AI数据校验失败.*角色 "李明"/);
+  assert.equal(attempts, 2); assert.equal(checkpoint!.analyses.length, 1); assert.equal(checkpoint!.understanding, undefined); assert.equal(checkpoint!.shots.length, 0);
+  assert.equal(checkpoint!.analyses[0].characters[0].sourceExcerpt, '李明');
+  const resumed = fakeAI(); await runAutoDirector({ script, settings, generate: resumed.generate, checkpoint });
+  assert.ok(resumed.calls.every(prompt => !prompt.includes('[DIRECTOR_ANALYSIS]')));
+});
+
+test('production metadata, extended reference roles and boundary provenance survive project and checkpoint JSON round trips', async () => {
+  const old = await projectFixture(true);
+  assert.equal('production' in validateDirectorProject(JSON.parse(JSON.stringify(old))), false);
+  assert.equal('boundary' in validateDirectorProject(JSON.parse(JSON.stringify(old))).shots[0], false);
+  const project = structuredClone(old); project.production = productionFixture(project);
+  project.shots[0].boundary = designBoundary();
+  project.shots[1].boundary = { start: [{ subject: '门', field: 'objectState', value: '半开', provenance: 'confirmed', sourceExcerpt: '' }], end: [] };
+  project.shots[2].boundary = { start: [], end: [{ subject: '钥匙', field: 'objectState', value: '被握紧', provenance: 'source', sourceExcerpt: '握紧钥匙' }] };
+  project.shots[0].referencePlan = ['prop', 'look', 'composition', 'previs'].map(role => ({ assetName: '按需要准备的素材', role: role as 'prop' | 'look' | 'composition' | 'previs', instruction: '只承担本项职责', exclusions: '无关身份和背景' }));
+  const imported = validateDirectorProject(JSON.parse(JSON.stringify(project)));
+  assert.deepEqual(imported, project);
+  const checkpoint = validateDirectorCheckpoint(JSON.parse(JSON.stringify(checkpointFromProject(project))));
+  assert.deepEqual(checkpoint.production, project.production);
+  assert.deepEqual(checkpoint.shots.map(shot => shot.boundary), project.shots.map(shot => shot.boundary));
+  const complete = await runAutoDirector({ script, settings, checkpoint, generate: async () => assert.fail('a complete restored project must not call a provider') });
+  assert.deepEqual(complete.production, project.production);
+  assert.deepEqual(complete.shots.map(shot => shot.boundary), project.shots.map(shot => shot.boundary));
+});
+
+test('AI cannot claim human-confirmed boundary states and failed repairs leave storyboard checkpoint intact', async () => {
+  const ai = fakeAI(); let attempts = 0; let checkpoint: DirectorCheckpoint | undefined;
+  const generate: DirectorGenerate = async (prompt, json, signal) => {
+    const response = await ai.generate(prompt, json, signal);
+    if (prompt.includes('[DIRECTOR_STORYBOARD]')) {
+      attempts++; const data = JSON.parse(response); data.shots[0].boundary = { start: [{ subject: '门', field: 'objectState', value: '半开', provenance: 'confirmed', sourceExcerpt: '' }], end: [] }; return JSON.stringify(data);
+    }
+    return response;
+  };
+  await assert.rejects(runAutoDirector({ script, settings, generate, onCheckpoint: value => { checkpoint = value; } }), /AI不得.*人工已确认/);
+  assert.equal(attempts, 2); assert.ok(checkpoint!.understanding); assert.deepEqual(checkpoint!.shots, []);
+  const fixed: DirectorGenerate = async (prompt, json, signal) => {
+    const response = await ai.generate(prompt, json, signal);
+    if (prompt.includes('[DIRECTOR_STORYBOARD]')) { const data = JSON.parse(response); data.shots[0].boundary = designBoundary(); return JSON.stringify(data); }
+    return response;
+  };
+  const resumed = await runAutoDirector({ script, settings, checkpoint, generate: fixed });
+  assert.equal(resumed.shots[0].boundary!.start[0].provenance, 'design');
+});
+
+test('regeneration inherits the location look and neighboring boundaries without sending source URLs or real binding tokens to AI', async () => {
+  const project = await projectFixture(true); project.production = productionFixture(project);
+  project.shots[0].boundary = { start: [], end: designBoundary('关闭').start };
+  project.shots[1].boundary = designBoundary('半开'); project.shots[2].boundary = designBoundary('打开');
+  const ai = fakeAI(); const result = await regenerateDirectorShot(project, project.shots[1].id, ai.generate);
+  assert.equal(ai.calls.length, 1); assert.match(ai.calls[0], /左侧窗光|柔和漫射/);
+  assert.match(ai.calls[0], /只参考冷暖关系/); assert.match(ai.calls[0], /相邻结构化交接/);
+  assert.match(ai.calls[0], /关闭/); assert.match(ai.calls[0], /打开/); assert.match(ai.calls[0], /半开/);
+  assert.doesNotMatch(ai.calls[0], /private\.example\.test|@图片4|"slot"|"binding"|光色参考\.png/);
+  assert.deepEqual(result.production, project.production); assert.deepEqual(result.shots[1].boundary, project.shots[1].boundary);
+  assert.deepEqual(result.shots[0], project.shots[0]); assert.deepEqual(result.shots[2], project.shots[2]);
+  assert.match(buildDirectorCopyPrompt(result, result.shots[1]), /@图片4/);
+});
+
+test('resuming pending prompts preserves production and exports human bindings plus boundary review separately from AI prose', async () => {
+  const project = await projectFixture(true); project.production = productionFixture(project);
+  project.shots[0].boundary = { start: [], end: designBoundary('关闭').start };
+  project.shots[1].boundary = designBoundary('半开');
+  const pending = structuredClone(project); pending.shots.forEach(shot => { shot.masterPrompt = ''; shot.referencePlan = []; shot.postProductionNotes = []; });
+  const ai = fakeAI(); const resumed = await runAutoDirector({ script, settings, checkpoint: checkpointFromProject(pending), generate: ai.generate });
+  assert.deepEqual(resumed.production, project.production);
+  assert.ok(ai.calls.every(prompt => prompt.includes('[DIRECTOR_PROMPTS]')));
+  const markdown = exportDirectorMarkdown(resumed);
+  assert.match(markdown, /制作资料（文件名、链接与职责文字/); assert.match(markdown, /场景光色卡/); assert.match(markdown, /起止状态/);
+  assert.match(markdown, /文字不同只提醒核对，不自动认定冲突/);
+  const copyBlock = markdown.match(/### 可复制提示词\n(`{3,})text\n([\s\S]*?)\n\1/)![2];
+  assert.equal(copyBlock, buildDirectorCopyPrompt(resumed, resumed.shots[0]));
+  assert.match(copyBlock, /@图片4/); assert.doesNotMatch(resumed.shots[0].masterPrompt, /@图片4/);
+});
+
+test('unique asset evidence with CRLF, wrapping or Unicode whitespace differences stores the actual original contiguous slice', () => {
+  const source = '室内。\r\n李明，停在门边。\r\n右手握着钥匙。';
+  for (const excerpt of ['李明，停在门边。右手握着钥匙。', '李明， 停在门边。\n右手\u3000握着钥匙。', '李明，\u00a0停在门边。\u2009右手握着钥匙。']) {
+    const project = rawProject(source, '', '', ['李明']);
+    project.understanding.characters[0].sourceExcerpt = excerpt;
+    const restored = validateDirectorProject(project);
+    assert.equal(restored.understanding.characters[0].sourceExcerpt, '李明，停在门边。\r\n右手握着钥匙。');
+    assert.equal(restored.sourceScript, source);
+    assert.equal(restored.shots[0].sourceExcerpt, source);
+    assert.equal(project.understanding.characters[0].sourceExcerpt, excerpt, 'recovery does not mutate the caller backup');
+  }
+});
+
+test('whitespace recovery never repairs punctuation, spelling, missing characters or Unicode compatibility differences', () => {
+  const source = '室内。李明，停在门边。\r\n右手握着Ａ型钥匙。';
+  for (const excerpt of [
+    '李明,停在门边。右手握着Ａ型钥匙。', '李明，站在门边。右手握着Ａ型钥匙。',
+    '李明，停在门边。右手握Ａ型钥匙。', '李明，停在门边。右手握着A型钥匙。',
+  ]) {
+    const project = rawProject(source, '', '', ['李明']); project.understanding.characters[0].sourceExcerpt = excerpt;
+    assert.throws(() => validateDirectorProject(project), /原文依据不在剧本中/);
+  }
+});
+
+test('ambiguous whitespace-only recovery is rejected, while an exact excerpt keeps its original spelling', () => {
+  const source = '室内。李明 停住。随后李明\n停住。';
+  const project = rawProject(source, '', '', ['李明']); project.understanding.characters[0].sourceExcerpt = '李明\t停住。';
+  assert.throws(() => validateDirectorProject(project), /多个匹配位置，不能自动选择/);
+  project.understanding.characters[0].sourceExcerpt = '李明 停住。';
+  assert.equal(validateDirectorProject(project).understanding.characters[0].sourceExcerpt, '李明 停住。');
+});
+
+test('asset formatting recovery does not loosen source coverage or boundary evidence validation', () => {
+  const source = '室内。李明，停在门边。\r\n右手握着钥匙。';
+  const changedCoverage = rawProject(source, '', '', ['李明']); changedCoverage.shots[0].sourceExcerpt = source.replace('\r\n', '\n');
+  assert.throws(() => validateDirectorProject(changedCoverage), /来源位置不一致/);
+  const changedBoundary = rawProject(source, '', '', ['李明']); changedBoundary.shots[0].boundary = {
+    start: [{ subject: '李明', field: 'rightHand', value: '钥匙', provenance: 'source', sourceExcerpt: '停在门边。右手握着钥匙。' }], end: [],
+  };
+  assert.throws(() => validateDirectorProject(changedBoundary), /状态原文依据必须逐字/);
 });

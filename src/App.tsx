@@ -125,7 +125,7 @@ export function Workspace({ user, credits, accountError = '' }: { user: User; cr
     setVisited(previous => previous.includes(to) ? previous : [...previous, to]);
   };
   const exportDraft = () => {
-    if (directorActivity.hasUnsavedChanges) { setMessage('请先保存或取消分镜修改，再导出创作草稿。'); return; }
+    if (directorActivity.hasUnsavedChanges) { setMessage('请先保存或取消分镜、状态或制作资料修改，再导出创作草稿。'); return; }
     downloadText(JSON.stringify(draftRef.current, null, 2), `CinePrompt-创作草稿-${new Date().toISOString().slice(0, 10)}.json`);
   };
   const localWorkPending = directorActivity.busy || directorActivity.hasUnsavedChanges || apiActivity.activeRequests > 0;
@@ -191,7 +191,7 @@ export function Workspace({ user, credits, accountError = '' }: { user: User; cr
         <div className="flex w-full min-w-0 max-w-full flex-wrap items-center gap-2 sm:w-auto"><ApiConnectionSettings uid={user.uid} busy={directorActivity.busy} /><button disabled={directorActivity.hasUnsavedChanges} onClick={exportDraft} className="flex min-h-10 items-center gap-2 rounded-lg border border-white/15 px-3 text-xs text-white/80 hover:bg-white/5 disabled:opacity-50"><Download className="size-4" />导出草稿</button><button ref={rechargeButtonRef} onClick={() => setRechargeOpen(true)} className="min-h-10 rounded-lg border border-white/15 px-3 text-xs text-white/60 hover:bg-white/5">试用额度 <span className="font-mono tabular-nums text-white">{credits === null ? '—' : credits.toLocaleString()}</span></button><button disabled={localWorkPending} onClick={() => { if (!localWorkPending) logOut().catch(() => setMessage('退出失败，请稍后重试。')); }} className="min-h-10 rounded-lg px-2 text-xs text-white/60 hover:text-white disabled:opacity-50">退出</button></div>
       </header>
       {(storageError || accountError || message) && <div role="alert" className="mx-4 mt-4 rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-sm text-amber-100 sm:mx-6">{storageError || accountError || message}{storageError && <button onClick={openSettings} className="ml-3 underline">处理草稿保存</button>}</div>}
-      {localWorkPending && <p role="status" className="mx-4 mt-3 text-pretty text-xs leading-6 text-white/60 sm:mx-6">{directorActivity.hasUnsavedChanges ? '有分镜修改尚未保存。请先保存或取消修改，再导出草稿或退出账号。' : '正在处理创作，请先停止生成或等待完成，再退出账号。'}</p>}
+      {localWorkPending && <p role="status" className="mx-4 mt-3 text-pretty text-xs leading-6 text-white/60 sm:mx-6">{directorActivity.hasUnsavedChanges ? '有分镜、状态或制作资料修改尚未保存。请先保存或取消修改，再导出草稿或退出账号。' : '正在处理创作，请先停止生成或等待完成，再退出账号。'}</p>}
       {scriptOutdated && activeStage !== 'auto-director' && <div role="status" className="mx-4 mt-4 rounded-xl border border-white/15 p-3 text-sm text-white/70 sm:mx-6">剧本已修改，现有设定和分镜仍来自上次解析。<button onClick={() => navigate('script')} className="ml-3 underline">重新解析最新剧本</button></div>}
       <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8"><div className="mx-auto max-w-6xl lg:h-full">
         {panels.map(stage => <section key={stage} hidden={activeStage !== stage} className="stage-panel h-full" aria-label={stages.find(item => item.id === stage)?.label}><Suspense fallback={<Loading />}>
@@ -211,7 +211,7 @@ export function Workspace({ user, credits, accountError = '' }: { user: User; cr
         {storageConflict && <p className="text-pretty text-sm leading-6 text-amber-100">另一标签页已保存不同版本。本窗口内容仍保留，选择版本前会先导出备份。</p>}
         {storageConflict && <button disabled={localWorkPending} onClick={adoptStoredDraft} className="min-h-11 w-full rounded-xl border border-white/20 px-4 text-sm text-white/90 disabled:opacity-50">备份本窗口并载入浏览器版本</button>}
         {savePaused && <button disabled={localWorkPending} onClick={backupStoredAndResume} className="min-h-11 w-full rounded-xl border border-amber-200/25 px-4 text-sm text-amber-100 disabled:opacity-50">{storageConflict ? '备份另一版本并保留本窗口' : '备份原始缓存并启用保存'}</button>}
-        {savePaused && localWorkPending && <p className="text-pretty text-xs leading-6 text-white/60">请先停止生成，并保存或取消未保存的分镜修改，再处理草稿版本。</p>}
+        {savePaused && localWorkPending && <p className="text-pretty text-xs leading-6 text-white/60">请先停止生成，并保存或取消未保存的分镜、状态或制作资料修改，再处理草稿版本。</p>}
         {!draft.scriptData && !draft.charactersAndScenes && !draft.storyboards?.length && <button onClick={importLegacy} className="min-h-11 w-full rounded-xl border border-white/15 px-4 text-sm text-white/80">导入此浏览器的旧版草稿</button>}
       </div>{message && <p role="status" className="mt-4 text-sm text-white/70">{message}</p>}<Dialog.Close aria-label="关闭草稿设置" className="absolute top-4 right-4 rounded-lg p-2 text-white/60 hover:text-white"><X className="size-4" /></Dialog.Close>
     </Dialog.Content></Dialog.Portal></Dialog.Root>

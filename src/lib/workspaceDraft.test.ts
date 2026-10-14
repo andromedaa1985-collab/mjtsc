@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { draftKey, emptyDraft, loadDraft, loadLegacyDraft, saveDraft, saveDraftWithBaseline, validateDraft } from './workspaceDraft.ts';
-import { chunkDirectorScript } from './autoDirector.ts';
+import { chunkDirectorScript, type DirectorProject } from './autoDirector.ts';
 
 const memory = () => {
   const values = new Map<string, string>();
@@ -12,6 +12,30 @@ test('drafts are isolated between account owners', () => {
   saveDraft(storage, 'writer-a', { ...emptyDraft, scriptData: 'A的剧本' });
   assert.equal(loadDraft(storage, 'writer-a').draft.scriptData, 'A的剧本');
   assert.equal(loadDraft(storage, 'writer-b').draft.scriptData, '');
+});
+
+test('account draft roundtrip preserves material confirmation, scene look and evidence-backed shot states', () => {
+  const source = '门口。她握着钥匙。';
+  const project: DirectorProject = {
+    version: 1, sourceScript: source, settings: { ...emptyDraft.directorSettings },
+    understanding: { summary: '她在门口持钥匙', storyArc: '停在门口',
+      characters: [{ name: '她', description: '原文人物', sourceExcerpt: '她' }],
+      scenes: [{ name: '门口', description: '原文地点', sourceExcerpt: '门口' }], continuityRules: [], uncertainties: [] },
+    shots: [{ id: 'shot-1', shotNumber: 1, scene: '门口', charactersInvolved: ['她'], sourceExcerpt: source,
+      sourceStart: 0, sourceEnd: source.length, sourceChunkId: 'chunk-1', action: '她握着钥匙', camera: '手部近景',
+      dialogue: '', durationSeconds: 5, continuity: '停在门口', referencePlan: [], masterPrompt: '', postProductionNotes: [], qaWarnings: [],
+      boundary: { start: [{ subject: '她', field: 'objectState', value: '握着钥匙', provenance: 'source', sourceExcerpt: '她握着钥匙' }], end: [] } }],
+    production: { assets: [{ id: 'ref-1', assetName: '定妆图', role: 'character', identityGroup: '她', sourceLabel: '定妆.png', sourceUrl: '',
+      instruction: '只取人物身份', exclusions: '不带背景', shotIds: ['shot-1'], binding: { platform: 'jimeng', mediaType: 'image', slot: 2, confirmed: true } }],
+      sceneLooks: [{ scene: '门口', mainLight: '设计建议：侧面天光', quality: '', environmentColor: '', subjectColor: '', accentColor: '', contrast: '', allowedChanges: '' }] },
+  };
+  const storage = memory();
+  const draft = { ...emptyDraft, scriptData: source, directorProject: project };
+  assert.equal(saveDraft(storage, 'production-writer', draft), '');
+  const restored = loadDraft(storage, 'production-writer');
+  assert.equal(restored.error, '');
+  assert.deepEqual(restored.draft.directorProject, project);
+  assert.equal(loadDraft(storage, 'other-writer').draft.directorProject, null);
 });
 test('malformed cache is retained and a recoverable empty state is returned', () => {
   const storage = memory(); storage.setItem(draftKey('writer'), '{broken');
