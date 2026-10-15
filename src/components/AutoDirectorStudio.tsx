@@ -5,11 +5,12 @@ import { cn } from '../lib/utils';
 import { readScriptFileWithInfo } from '../lib/scriptFiles';
 import { commitDirectorShotEdit, createDirectorShotEdit, directorShotEditHasChanges, readDirectorShotEdit, rebaseDirectorShotEdit, type DirectorShotDraft, type DirectorShotEdit, type DirectorCraftField } from '../lib/directorEditing';
 import { DIRECTOR_METHODS, DIRECTOR_METHOD_TEMPLATES, getDirectorMethod } from '../lib/directorMethods';
+import { reconcileDirectorPlanTiming, type DirectorDurationPlan } from '../lib/directorPlan';
 import DirectorProductionPanel from './DirectorProductionPanel';
 import DirectorBoundaryEditor from './DirectorBoundaryEditor';
 import { DIRECTOR_REFERENCE_LABELS, buildDirectorCopyPrompt, updateDirectorProduction, updateDirectorBoundary, type DirectorProduction, type DirectorShotBoundary } from '../lib/directorProduction';
 import {
-  runAutoDirector, regenerateDirectorShot, validateDirectorProject, validateDirectorCheckpoint, validateDirectorSettings, exportDirectorMarkdown,
+  runAutoDirector, estimateAutoDirector, regenerateDirectorShot, validateDirectorProject, validateDirectorCheckpoint, validateDirectorSettings, exportDirectorMarkdown,
   type DirectorProject, type DirectorCheckpoint, type DirectorSettings, type DirectorProgress, type DirectorShot,
 } from '../lib/autoDirector';
 
@@ -154,9 +155,68 @@ function validateSavedSnapshot(value: unknown): DirectorSnapshot {
 const steps = [
   { id: 'analysis', label: '阅读原文' },
   { id: 'understanding', label: '整理故事与设定' },
+  { id: 'planning', label: '估算全剧时长' },
   { id: 'storyboard', label: '编排分镜' },
   { id: 'prompts', label: '编写逐镜提示词' },
 ];
+
+function formatDuration(seconds: number) {
+  const rounded = Math.round(seconds * 100) / 100;
+  const minutes = Math.floor(rounded / 60);
+  const remainder = Number((rounded % 60).toFixed(2));
+  return minutes ? minutes + ' 分' + (remainder ? ' ' + remainder + ' 秒' : '') : rounded + ' 秒';
+}
+
+function DurationPlanPanel({ plan, shots, currentRun, sourceMatches }: {
+  plan: DirectorDurationPlan; shots: DirectorShot[]; currentRun: boolean; sourceMatches: boolean;
+}) {
+  const timing = reconcileDirectorPlanTiming(plan, shots);
+  const withinEstimate = timing.actualTotalSeconds >= plan.estimatedMinSeconds && timing.actualTotalSeconds <= plan.estimatedMaxSeconds;
+  const referenceCount = plan.estimatedSegmentCount.min === plan.estimatedSegmentCount.max
+    ? String(plan.estimatedSegmentCount.min) : plan.estimatedSegmentCount.min + '–' + plan.estimatedSegmentCount.max;
+  const difference = timing.actualTotalSeconds < plan.estimatedMinSeconds
+    ? '比预计下限少 ' + formatDuration(plan.estimatedMinSeconds - timing.actualTotalSeconds)
+    : '比预计上限多 ' + formatDuration(timing.actualTotalSeconds - plan.estimatedMaxSeconds);
+  return <section className="mb-7 rounded-2xl border border-amber-200/20 bg-amber-200/[0.025] p-5" aria-labelledby="director-duration-plan-title">
+    <h2 id="director-duration-plan-title" className="text-lg font-semibold">{currentRun ? '本轮全剧时长规划' : '全剧时长规划'}</h2>
+    <p className="mt-2 text-pretty text-xs leading-6 text-zinc-400">先按整部剧情估算，再用以下片段任务指导分镜。{!sourceMatches && '这份规划对应已保存草案的原文与设置。'}</p>
+    <dl className="mt-5 grid gap-5 sm:grid-cols-3">
+      <div><dt className="text-xs text-zinc-400">预计全剧时长</dt><dd className="mt-2 text-lg font-semibold tabular-nums text-amber-100">{formatDuration(plan.estimatedMinSeconds)}–{formatDuration(plan.estimatedMaxSeconds)}</dd></div>
+      <div><dt className="text-xs text-zinc-400">实际规划片段</dt><dd className="mt-2 text-lg font-semibold tabular-nums text-zinc-100">{plan.segments.length} 段</dd></div>
+      <div><dt className="text-xs text-zinc-400">每段编排目标</dt><dd className="mt-2 text-lg font-semibold tabular-nums text-zinc-100">{plan.targetSegmentSeconds} 秒</dd></div>
+    </dl>
+    <p className="mt-4 text-pretty text-xs leading-6 text-zinc-500">按总时长折算，约相当于 {referenceCount} 个完整 30 秒段；实际按剧情落点规划为 {plan.segments.length} 段，尾段或自然边界可较短。一个规划段可以包含多个电影镜头。提交生成时，请按所选工具允许的时长拆分。</p>
+    <div className="mt-5 border-t border-white/10 pt-4">
+      <h3 className="text-sm font-medium text-zinc-300">分镜时长复核</h3>
+      {!shots.length ? <p className="mt-2 text-pretty text-xs leading-6 text-zinc-500">分镜尚未生成。完成后会按各镜时长重新合计，核对全剧是否偏离预计范围。</p>
+        : <>
+          <p className="mt-2 text-sm leading-7 tabular-nums text-zinc-200">{timing.complete ? '当前分镜合计' : '已编排分镜累计'} {formatDuration(timing.actualTotalSeconds)} · {shots.length} 个分镜片段</p>
+          <p className={cn('mt-1 text-pretty text-xs leading-6', timing.complete && !withinEstimate ? 'text-amber-100' : 'text-zinc-400')}>{!timing.complete ? '原文尚未全部编排，当前累计不是全剧总时长。'
+            : withinEstimate ? '全文已编排，分镜合计时长在预计范围内。'
+              : '全文已编排，' + difference + '。请核对对白、动作与停顿，按剧情需要调整。'}</p>
+          <p className="mt-1 text-pretty text-xs leading-6 text-zinc-500">这里复核的是文字分镜计划；实际成片时长需在视频生成后再次核对。</p>
+        </>}
+    </div>
+    <details className="mt-4 border-t border-white/10 pt-1">
+      <summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-sm text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">查看 {plan.segments.length} 段剧情任务与时长安排</summary>
+      <ol className="divide-y divide-white/10">
+        {plan.segments.map((segment, index) => {
+          const review = timing.segments[index];
+          return <li key={segment.id} className="py-2"><details>
+            <summary className="min-h-11 cursor-pointer rounded-lg py-2 text-sm leading-7 text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60"><span className="ml-1 font-medium">第 {segment.number} 段</span><span className="ml-3 text-xs tabular-nums text-zinc-400">预计 {formatDuration(segment.durationMinSeconds)}–{formatDuration(segment.durationMaxSeconds)}</span><span className="mt-1 block pl-5 text-pretty text-zinc-400">{segment.storyPurpose}</span></summary>
+            <dl className="space-y-3 py-3 pl-5 text-sm leading-7">
+              <div><dt className="text-xs text-zinc-500">对白演绎参考</dt><dd className="tabular-nums text-zinc-300">{segment.dialogueSeconds ? formatDuration(segment.dialogueSeconds) + '，动作与对白可重叠，不重复相加。' : '本段没有明确的原文对白。'}</dd></div>
+              <div><dt className="text-xs text-zinc-500">动作、反应与停顿</dt><dd className="whitespace-pre-wrap text-pretty text-zinc-300">{segment.actionNotes}</dd></div>
+              <div><dt className="text-xs text-zinc-500">结束状态与下段承接</dt><dd className="whitespace-pre-wrap text-pretty text-zinc-300">{segment.transitionNotes}</dd></div>
+              {!!shots.length && <div><dt className="text-xs text-zinc-500">当前分镜复核</dt><dd className={cn('text-pretty tabular-nums', review.withinEstimate === false ? 'text-amber-100' : 'text-zinc-300')}>{review.crossingShotIds.length ? '有镜头跨越本段边界，暂不单独分摊时长。' : review.actualSeconds === null ? '本段原文尚未完整编排。' : formatDuration(review.actualSeconds) + (review.withinEstimate ? '，在预计范围内。' : '，超出预计范围，请核对节奏。')}</dd></div>}
+            </dl>
+            <details className="pb-3 pl-5"><summary className="min-h-11 cursor-pointer rounded-lg py-2.5 text-xs text-zinc-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/60">对照本段原文</summary><p className="whitespace-pre-wrap border-l border-white/15 pl-3 text-sm leading-7 text-zinc-400">{segment.sourceExcerpt}</p></details>
+          </details></li>;
+        })}
+      </ol>
+    </details>
+  </section>;
+}
 
 const SHOTS_PER_PAGE = 12;
 const craftFields: Array<{ key: DirectorCraftField; label: string; placeholder: string }> = [
@@ -337,7 +397,7 @@ function ShotPagination({ page, pages, disabled = false, onChange }: { page: num
 
 export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
   const { script, onScriptChange, project, onProjectChange, checkpoint, onCheckpointChange, settings, onSettingsChange, generate } = props;
-  const [pending, setPending] = useState<{ kind: 'project' | 'shot'; shotId?: string } | null>(null);
+  const [pending, setPending] = useState<{ kind: 'project' | 'shot'; shotId?: string; estimateOnly?: boolean } | null>(null);
   const [progress, setProgress] = useState<DirectorProgress | null>(null);
   const [reading, setReading] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -373,8 +433,12 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
   latest.current = props;
   const busy = pending !== null || reading;
   const canResume = !!checkpoint && checkpoint.sourceScript === script && sameSettings(checkpoint.settings, settings);
+  const canContinueEstimate = canResume && !!checkpoint?.plan && checkpoint.shots.length === 0;
   const sourceChanged = !!project && (project.sourceScript !== script || !sameSettings(project.settings, settings));
-  const displayProject = project || (checkpoint?.understanding ? { version: 1 as const, sourceScript: checkpoint.sourceScript, settings: checkpoint.settings, understanding: checkpoint.understanding, shots: checkpoint.shots, ...(checkpoint.production ? { production: checkpoint.production } : {}) } : null);
+  const displayProject = project || (checkpoint?.understanding ? { version: 1 as const, sourceScript: checkpoint.sourceScript, settings: checkpoint.settings, understanding: checkpoint.understanding, shots: checkpoint.shots, ...(checkpoint.plan ? { plan: checkpoint.plan } : {}), ...(checkpoint.production ? { production: checkpoint.production } : {}) } : null);
+  // A new run can coexist with an older complete draft; never mix their estimates and shots.
+  const planOwner = canResume ? checkpoint : displayProject;
+  const planSourceMatches = !!planOwner && planOwner.sourceScript === script && sameSettings(planOwner.settings, settings);
   const readyPrompts = displayProject?.shots.filter(shot => !!shot.masterPrompt.trim()).length || 0;
   const canEdit = !!project && !busy && !sourceChanged;
   const getShotEdit = (shot: DirectorShot) => readDirectorShotEdit(shot, shotDrafts[shot.id]);
@@ -432,7 +496,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
     finally { readingRef.current = false; if (mounted.current) setReading(false); }
   };
 
-  const run = async (resume: boolean) => {
+  const run = async (resume: boolean, estimateOnly = false) => {
     if (operation.current || readingRef.current) return;
     if (hasUnsavedChanges) { setError('请先保存或取消分镜、状态或制作资料修改，再开始制作。'); return; }
     if (resume && !canResume) { setError('这份中断进度与当前原文或设置不同，未继续制作。'); return; }
@@ -441,14 +505,23 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
     const controller = new AbortController();
     const runNumber = ++sequence.current;
     operation.current = controller;
-    setPending({ kind: 'project' }); setProgress(null); setStopping(false); setError(''); setNotice(''); setShotError(null);
+    setPending({ kind: 'project', estimateOnly }); setProgress(null); setStopping(false); setError(''); setNotice(''); setShotError(null);
     try {
-      const result = await runAutoDirector({
+      const options = {
         script, settings, generate, signal: controller.signal,
         ...(resume && checkpoint ? { checkpoint } : {}),
-        onProgress: value => { if (mounted.current && sequence.current === runNumber) setProgress(value); },
-        onCheckpoint: value => { if (mounted.current && sequence.current === runNumber) latest.current.onCheckpointChange(value); },
-      });
+        onProgress: (value: DirectorProgress) => { if (mounted.current && sequence.current === runNumber) setProgress(value); },
+        onCheckpoint: (value: DirectorCheckpoint) => { if (mounted.current && sequence.current === runNumber) latest.current.onCheckpointChange(value); },
+      };
+      if (estimateOnly) {
+        const estimate = await estimateAutoDirector(options);
+        if (controller.signal.aborted) throw new DOMException('生成已停止', 'AbortError');
+        if (!mounted.current || sequence.current !== runNumber) return;
+        if (latest.current.script !== script || !sameSettings(latest.current.settings, settings)) throw new Error('原文或创作设置已经改变，请核对已保存的估算对应哪份剧本。');
+        setNotice('全剧估算已保存。可先查看时长与片段安排，再点击「' + (estimate.shots.length ? '从中断处继续' : '按估算继续生成分镜与提示词') + '」。');
+        return;
+      }
+      const result = await runAutoDirector(options);
       if (controller.signal.aborted) throw new DOMException('生成已停止', 'AbortError');
       if (!mounted.current || sequence.current !== runNumber) return;
       if (latest.current.script !== script || !sameSettings(latest.current.settings, settings)) throw new Error('原文或创作设置已经改变，本次结果没有替换当前项目。');
@@ -586,7 +659,8 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
 
   const coveredSourceEnd = checkpoint?.shots.at(-1)?.sourceEnd || 0;
   const restoredStage = checkpoint ? coveredSourceEnd === checkpoint.sourceScript.length ? 'prompts'
-    : checkpoint.understanding ? 'storyboard' : checkpoint.analyses.length === checkpoint.chunks.length ? 'understanding' : 'analysis' : undefined;
+    : checkpoint.understanding ? (checkpoint.plan || checkpoint.shots.length ? 'storyboard' : 'planning')
+      : checkpoint.analyses.length === checkpoint.chunks.length ? 'understanding' : 'analysis' : undefined;
   const currentStep = progress?.stage === 'complete' ? steps.length : steps.findIndex(step => step.id === (progress?.stage || restoredStage));
   const exportProject = (format: 'json' | 'md') => {
     try {
@@ -605,7 +679,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
         <div>
           <p className="mb-3 flex items-center gap-2 text-xs font-medium text-amber-200"><Clapperboard className="size-4" aria-hidden="true" />CinePrompt · 自动导演</p>
           <h1 className="text-balance text-3xl font-semibold sm:text-4xl">从一份剧本，到可用的分镜草案。</h1>
-          <p className="mt-3 max-w-2xl text-pretty text-sm leading-7 text-zinc-400">贴入故事，一次整理故事理解、人物场景、分镜与逐镜提示词。全程只生成文字，无需生成或上传图片。你可以继续修改每一镜。</p>
+          <p className="mt-3 max-w-2xl text-pretty text-sm leading-7 text-zinc-400">贴入故事，先理解整部剧情、估算全剧时长与 30 秒片段安排，再生成分镜与逐镜提示词。全程只生成文字，无需生成或上传图片。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <input ref={restoreInput} type="file" accept=".json,application/json" className="hidden" disabled={busy} aria-label="选择已导出的创作项目" onChange={event => {
@@ -640,13 +714,16 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
             {scriptWarning && <p role="status" className="mt-3 text-pretty text-xs leading-6 text-amber-100">{scriptWarning}</p>}
             <SettingsForm settings={settings} onChange={onSettingsChange} disabled={busy || hasUnsavedChanges} onStatus={setNotice} />
             <div className="mt-5 space-y-3">
-              <button type="button" disabled={busy || hasUnsavedChanges || !script.trim() || script.length > MAX_SCRIPT_LENGTH} onClick={() => { void run(false); }} className="flex min-h-12 w-full items-center justify-center gap-3 rounded-xl bg-amber-200 px-4 py-3 text-sm font-semibold text-zinc-950 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 disabled:cursor-not-allowed disabled:opacity-50">
-                <Clapperboard className="size-4" aria-hidden="true" />{pending?.kind === 'project' ? '正在制作创作草案…' : '自动生成分镜与提示词'}{!busy && <ArrowRight className="size-4" aria-hidden="true" />}
+              <button type="button" disabled={busy || hasUnsavedChanges || !script.trim() || script.length > MAX_SCRIPT_LENGTH} onClick={() => { void run(canResume && (!!checkpoint?.plan || !checkpoint?.shots.length), true); }} className={cn(secondaryButtonClass, 'w-full border-amber-200/30 text-amber-100')}>
+                <BookOpen className="size-4" aria-hidden="true" />{pending?.estimateOnly ? '正在分析并估算…' : '先分析并估算'}
+              </button>
+              <button type="button" disabled={busy || hasUnsavedChanges || !script.trim() || script.length > MAX_SCRIPT_LENGTH} onClick={() => { void run(canContinueEstimate); }} className="flex min-h-12 w-full items-center justify-center gap-3 rounded-xl bg-amber-200 px-4 py-3 text-sm font-semibold text-zinc-950 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 disabled:cursor-not-allowed disabled:opacity-50">
+                <Clapperboard className="size-4" aria-hidden="true" />{pending?.kind === 'project' ? pending.estimateOnly ? '正在估算全剧…' : '正在制作创作草案…' : canContinueEstimate ? '按估算继续生成分镜与提示词' : '自动生成分镜与提示词'}{!busy && <ArrowRight className="size-4" aria-hidden="true" />}
               </button>
               {checkpoint && !busy && <button type="button" disabled={!canResume || hasUnsavedChanges} onClick={() => { void run(true); }} className={cn(secondaryButtonClass, 'w-full')}><RotateCcw className="size-4" aria-hidden="true" />从中断处继续</button>}
               {hasUnsavedChanges && <p className="text-pretty text-xs leading-6 text-amber-100">有分镜、状态或制作资料尚未保存。请在对应编辑区保存或取消。</p>}
               {checkpoint && !canResume && !busy && <p className="text-pretty text-xs leading-6 text-zinc-500">原文或设置与上次不同。请开始新一轮，现有结果会保留。</p>}
-              <p className="text-pretty text-xs leading-6 text-zinc-500">只需要文本 API。图片和素材绑定均为可选，不影响分镜与提示词生成。长剧本会分段处理，已完成的步骤会保留。</p>
+              <p className="text-pretty text-xs leading-6 text-zinc-500">只需要文本 API。新一轮先估算整部剧情，再按片段任务设计镜头；图片和素材绑定均为可选。长剧本会分块阅读，已完成的步骤会保留。</p>
             </div>
           </ScriptPanel>
         </div>
@@ -657,7 +734,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
               <h2 className="text-base font-semibold">{pending?.kind === 'shot' ? '正在更新单镜提示词' : pending ? '故事正在成为镜头' : checkpoint ? '已保留制作进度' : '创作草案已完成'}</h2>
               {pending && <button type="button" disabled={stopping} className={secondaryButtonClass} onClick={() => { operation.current?.abort(); setStopping(true); setNotice('正在停止，保留已完成的步骤…'); }}><Pause className="size-4" aria-hidden="true" />{stopping ? '正在停止…' : '停止生成'}</button>}
             </div>
-            {pending?.kind !== 'shot' && <ol className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs sm:grid-cols-4">
+            {pending?.kind !== 'shot' && <ol className={cn('grid grid-cols-2 gap-x-4 gap-y-3 text-xs sm:grid-cols-3', displayProject && 'sm:grid-cols-5')}>
               {steps.map((step, index) => <li key={step.id} aria-current={pending && index === currentStep ? 'step' : undefined} className={cn('flex items-center gap-2 leading-6', index === currentStep ? 'text-amber-200' : index < currentStep ? 'text-zinc-200' : 'text-zinc-500')}>
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-current font-mono text-xs tabular-nums">{index < currentStep ? <Check className="size-3" aria-hidden="true" /> : index + 1}</span>{step.label}
               </li>)}
@@ -666,11 +743,15 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
             {checkpoint && <p className="mt-2 text-xs tabular-nums leading-6 text-zinc-400">已保留 {checkpoint.shots.length} 镜，{checkpoint.completedPromptShotIds.length} 镜提示词。原文已覆盖 {coveredSourceEnd.toLocaleString()} / {checkpoint.sourceScript.length.toLocaleString()} 字。{coveredSourceEnd > 0 && coveredSourceEnd < checkpoint.sourceScript.length && '继续时只补做尚未覆盖的原文。'}</p>}
           </section>}
 
+          {planOwner?.plan && <DurationPlanPanel plan={planOwner.plan} shots={planOwner.shots} currentRun={planOwner === checkpoint} sourceMatches={planSourceMatches} />}
+          {planOwner && !planOwner.plan && !!planOwner.shots.length && <p className="mb-6 rounded-xl border border-white/10 p-4 text-pretty text-xs leading-6 text-zinc-400">这份草案沿用原来的逐镜编排，没有前置全剧时长规划。现有分镜和提示词可继续使用；开始新一轮时，将先估算全剧时长与 30 秒片段安排。</p>}
+
           {!displayProject ? <section className="pt-2" aria-label="创作流程介绍">
             <h2 className="text-balance text-xl font-medium">先把故事讲清楚，<br className="hidden xl:block" />再让镜头各司其职。</h2>
             <ol className="mt-6 space-y-6 border-l border-white/10 pl-5">
               <li><h3 className="text-sm font-medium text-zinc-300">读懂故事</h3><p className="mt-1 text-pretty text-sm leading-7 text-zinc-500">保留原文剧情与对白，找出人物、场景和关键转折。</p></li>
-              <li><h3 className="text-sm font-medium text-zinc-300">编排镜头</h3><p className="mt-1 text-pretty text-sm leading-7 text-zinc-500">按动作和对白分段，让位置、道具与前后状态衔接。</p></li>
+              <li><h3 className="text-sm font-medium text-zinc-300">先估算全剧时长</h3><p className="mt-1 text-pretty text-sm leading-7 text-zinc-500">根据对白、动作与情绪留白给出时长范围，规划每个 30 秒创作段的剧情任务。</p></li>
+              <li><h3 className="text-sm font-medium text-zinc-300">按计划编排镜头</h3><p className="mt-1 text-pretty text-sm leading-7 text-zinc-500">再设计段内镜头，让位置、道具与前后状态衔接，并复核实际编排时长。</p></li>
               <li><h3 className="text-sm font-medium text-zinc-300">交给你继续创作</h3><p className="mt-1 text-pretty text-sm leading-7 text-zinc-500">每一镜都有可编辑的说明与提示词，可单独重做。</p></li>
             </ol>
           </section> : <div>
@@ -703,7 +784,7 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
                   <button type="button" className={secondaryButtonClass} disabled={busy || hasUnsavedChanges || !project} onClick={() => exportProject('md')}><Download className="size-4" aria-hidden="true" />导出整份草案</button>
                 </div>
               </div>
-              <p className="mb-3 text-pretty text-xs leading-6 text-zinc-500">展开一镜修改并保存，再重做提示词。动作、运镜、承接或创作意图变化时，相邻镜的提示词也需更新。</p>
+              <p className="mb-3 text-pretty text-xs leading-6 text-zinc-500">{displayProject.plan && '一个 30 秒规划段可以包含多个下方镜头；每镜提示词按本镜时长使用。'}展开一镜修改并保存，再重做提示词。动作、运镜、承接或创作意图变化时，相邻镜的提示词也需更新。</p>
               {!!displayProject.shots.length && <div className="border-y border-white/10 py-4">
                 <div className="flex flex-wrap gap-3">
                   <label className="relative min-w-0 flex-1 basis-48"><span className="sr-only">搜索分镜</span><Search className="pointer-events-none absolute left-3 top-3.5 size-4 text-zinc-500" aria-hidden="true" /><input type="search" disabled={hasBoundaryChanges} value={shotQuery} onChange={event => { setShotQuery(event.target.value); setShotPage(1); }} placeholder="搜索场景、人物、动作或对白" className={cn(controlClass, 'w-full pl-9')} /></label>

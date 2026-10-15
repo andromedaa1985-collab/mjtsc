@@ -26,6 +26,12 @@ function fakeAI(options: { splitLines?: boolean; craft?: DirectorShotCraft; fail
     if (prompt.includes('[DIRECTOR_UNDERSTANDING]')) return JSON.stringify({ summary: '李明等到了归来的人', storyArc: '先问话，再握紧钥匙停住',
       characters: prompt.includes('李明') ? [{ name: '李明', description: '原文中的李明', sourceExcerpt: '李明' }] : [],
       scenes: [{ name: '室内', description: '同一室内空间', sourceExcerpt: '室内' }], continuityRules: ['钥匙在李明手里'], uncertainties: [] });
+    if (prompt.includes('[DIRECTOR_PLAN]')) {
+      const rows = JSON.parse(prompt.match(/<whole-script-source-table>([\s\S]*?)<\/whole-script-source-table>/)![1]) as [string, string, number, number][];
+      return JSON.stringify({ segments: rows.map(row => ({ sourceStartUnit: row[0], sourceEndUnit: row[0],
+        storyPurpose: '保留本段原文事件及完整对白', durationMinSeconds: Math.max(4, row[3]), durationMaxSeconds: 30,
+        dialogueSeconds: row[3], actionNotes: '对白与动作适当重叠，给原文反应留停顿，不新添事件', transitionNotes: '衔接下一段原文动作与站位' })) });
+    }
     if (prompt.includes('[DIRECTOR_STORYBOARD]')) {
       const source = prompt.match(/<source-script>\n([\s\S]*?)\n<\/source-script>/)![1];
       const pieces = options.splitLines ? source.match(/[^\n]*\n|[^\n]+$/g)!.filter(Boolean) : [source];
@@ -151,8 +157,8 @@ test('research generation receives all four stage guides and preserves exact sou
   const ai = fakeAI({ craft: researchedCraft });
   const project = await runAutoDirector({ script, settings: { ...settings, creativeMethod: 'sijia-film' }, generate: ai.generate });
   const stages = ['analysis', 'understanding', 'storyboard', 'prompts'] as const;
-  assert.equal(ai.calls.length, stages.length);
-  stages.forEach((stage, index) => assert.ok(ai.calls[index].includes(buildDirectorMethodGuidance('sijia-film', stage))));
+  assert.equal(ai.calls.length, stages.length + 1);
+  stages.forEach(stage => assert.ok(ai.calls.find(prompt => prompt.includes(`[DIRECTOR_${stage.toUpperCase()}]`))!.includes(buildDirectorMethodGuidance('sijia-film', stage))));
   for (const prompt of ai.calls) {
     assert.ok(prompt.includes('剧本是唯一剧情依据'));
     assert.ok(prompt.includes('待分析数据'));
@@ -161,10 +167,10 @@ test('research generation receives all four stage guides and preserves exact sou
   assert.deepEqual(project.shots[0].craft, researchedCraft);
   assert.equal(project.shots[0].dialogue, '李明：你……真的回来了吗？');
   assert.equal(project.shots[0].sourceExcerpt, script);
-  assert.ok(ai.calls[2].includes('每镜必须返回craft'));
-  assert.ok(ai.calls[3].includes(JSON.stringify(researchedCraft)));
-  assert.ok(ai.calls[3].includes('"previous":null'));
-  assert.ok(ai.calls[3].includes('"next":null'));
+  assert.ok(ai.calls.find(prompt => prompt.includes('[DIRECTOR_STORYBOARD]'))!.includes('每镜必须返回craft'));
+  assert.ok(ai.calls.find(prompt => prompt.includes('[DIRECTOR_PROMPTS]'))!.includes(JSON.stringify(researchedCraft)));
+  assert.ok(ai.calls.find(prompt => prompt.includes('[DIRECTOR_PROMPTS]'))!.includes('"previous":null'));
+  assert.ok(ai.calls.find(prompt => prompt.includes('[DIRECTOR_PROMPTS]'))!.includes('"next":null'));
 });
 
 test('new research storyboard rejects missing craft after one repair and keeps completed understanding', async () => {
@@ -375,8 +381,8 @@ test('pipeline uses real injected generation, full source coverage and source-ex
   const checkpoints: DirectorCheckpoint[] = [];
   const stages: string[] = [];
   const project = await runAutoDirector({ script, settings, generate: ai.generate, onCheckpoint: value => checkpoints.push(value), onProgress: value => stages.push(value.stage) });
-  assert.equal(ai.calls.length, 4);
-  assert.deepEqual(stages, ['analysis', 'understanding', 'storyboard', 'prompts', 'complete']);
+  assert.equal(ai.calls.length, 5);
+  assert.deepEqual(stages, ['analysis', 'understanding', 'planning', 'planning', 'storyboard', 'prompts', 'complete']);
   assert.equal(project.shots[0].sourceStart, 0);
   assert.equal(project.shots[0].sourceEnd, script.length);
   assert.equal(project.shots[0].sourceExcerpt, script);
@@ -385,8 +391,8 @@ test('pipeline uses real injected generation, full source coverage and source-ex
   assert.ok(!project.shots[0].dialogue.includes('AI试图'));
   assert.equal(checkpoints.at(-1)!.completedPromptShotIds.length, 1);
   assert.deepEqual(validateDirectorCheckpoint(checkpoints.at(-1)), checkpoints.at(-1));
-  assert.ok(ai.calls[3].includes('后一片段'));
-  assert.ok(ai.calls[3].includes('小云雀4K为超分'));
+  assert.ok(ai.calls.find(prompt => prompt.includes('[DIRECTOR_PROMPTS]'))!.includes('后一片段'));
+  assert.ok(ai.calls.find(prompt => prompt.includes('[DIRECTOR_PROMPTS]'))!.includes('小云雀4K为超分'));
 });
 
 test('visual quoted text is not invented dialogue and nickname quotes preserve the whole utterance', async () => {
@@ -558,7 +564,7 @@ function productionFixture(project: DirectorProject): DirectorProduction {
 function checkpointFromProject(project: DirectorProject): DirectorCheckpoint {
   return { version: 1, sourceScript: project.sourceScript, settings: project.settings, chunks: chunkDirectorScript(project.sourceScript),
     analyses: [{ chunkId: 'chunk-1', summary: '按原文分析', beats: ['依次发生原文事件'], characters: project.understanding.characters, scenes: project.understanding.scenes, continuityRules: [], uncertainties: [] }],
-    understanding: project.understanding, shots: project.shots, completedPromptShotIds: project.shots.filter(shot => shot.masterPrompt).map(shot => shot.id),
+    understanding: project.understanding, ...(project.plan ? { plan: project.plan } : {}), shots: project.shots, completedPromptShotIds: project.shots.filter(shot => shot.masterPrompt).map(shot => shot.id),
     ...(project.production ? { production: project.production } : {}) };
 }
 const designBoundary = (value = '半开'): DirectorShotBoundary => ({ start: [{ subject: '门', field: 'objectState', value, provenance: 'design', sourceExcerpt: '' }], end: [] });

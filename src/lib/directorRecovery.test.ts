@@ -45,6 +45,12 @@ function recoveryAI(storyboard: (request: BoardRequest) => unknown = request => 
       characters: [{ name: '李明', description: '原文角色', sourceExcerpt: '李明' }],
       scenes: [{ name: '室内', description: '原文空间', sourceExcerpt: '室内' }], continuityRules: [], uncertainties: [],
     });
+    if (prompt.includes('[DIRECTOR_PLAN]')) {
+      const rows = JSON.parse(prompt.match(/<whole-script-source-table>([\s\S]*?)<\/whole-script-source-table>/)![1]) as [string, string, number, number][];
+      return JSON.stringify({ segments: rows.map(row => ({ sourceStartUnit: row[0], sourceEndUnit: row[0],
+        storyPurpose: '保留本段原文事件及完整对白', durationMinSeconds: Math.max(4, row[3]), durationMaxSeconds: 30,
+        dialogueSeconds: row[3], actionNotes: '对白与动作适当重叠，给原文反应留停顿，不新添事件', transitionNotes: '衔接下一段原文动作与站位' })) });
+    }
     if (prompt.includes('[DIRECTOR_STORYBOARD]')) {
       const request = { call: boards.length + 1, prompt, text: prompt.match(/<source-script>\n([\s\S]*?)\n<\/source-script>/)![1], rows: storyboardRows(prompt) };
       boards.push(request);

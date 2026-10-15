@@ -3,6 +3,10 @@ import { parseAIJson } from './workflowValidation';
 import { buildDirectorMethodGuidance, getDirectorMethod, type DirectorMethodId } from './directorMethods';
 import { buildDirectorSourceUnits, resolveDirectorExcerptEnd } from './directorSource';
 import {
+  buildDirectorPlanPrompt, parseDirectorDurationPlan, validateDirectorDurationPlan, reconcileDirectorPlanTiming,
+  type DirectorDurationPlan, type DirectorSourceRow,
+} from './directorPlan';
+import {
   DIRECTOR_REFERENCE_LABELS, DIRECTOR_REFERENCE_ROLES, DIRECTOR_STATE_LABELS, buildDirectorCopyPrompt,
   buildDirectorProductionContext, compareDirectorBoundaries, validateDirectorBoundary, validateDirectorProduction,
   type DirectorProduction, type DirectorReferenceRole, type DirectorShotBoundary,
@@ -46,6 +50,7 @@ export interface DirectorShot {
 export interface DirectorProject {
   version: 1; sourceScript: string; settings: DirectorSettings; understanding: DirectorUnderstanding; shots: DirectorShot[];
   production?: DirectorProduction;
+  plan?: DirectorDurationPlan;
 }
 export interface DirectorChunk { id: string; start: number; end: number; text: string }
 export interface DirectorChunkAnalysis {
@@ -57,9 +62,10 @@ export interface DirectorCheckpoint {
   analyses: DirectorChunkAnalysis[]; understanding?: DirectorUnderstanding;
   shots: DirectorShot[]; completedPromptShotIds: string[];
   production?: DirectorProduction;
+  plan?: DirectorDurationPlan;
 }
 export interface DirectorProgress {
-  stage: 'analysis' | 'understanding' | 'storyboard' | 'prompts' | 'complete';
+  stage: 'analysis' | 'understanding' | 'planning' | 'storyboard' | 'prompts' | 'complete';
   completed: number; total: number; message: string;
 }
 export interface RunAutoDirectorOptions {
@@ -558,6 +564,20 @@ function validateCoverage(shots: DirectorShot[], script: string, expectedEnd: nu
   }
   if (cursor !== expectedEnd) invalid(`分镜尚未完整覆盖原文（已覆盖${cursor}/${script.length}字符）。`);
 }
+/** One authoritative, global index for planning across all reading chunks. */
+export function buildDirectorPlanningRows(script: string, characters: string[]): DirectorSourceRow[] {
+  const spans = dialogueSpans(script, characters);
+  return chunkDirectorScript(script).flatMap((chunk, chunkIndex) => buildDirectorSourceUnits(chunk).map(unit => {
+    const start = chunk.start + unit.start;
+    const end = chunk.start + unit.end;
+    const dialogueCharacters = dialogueWordCount(canonicalDialogue(script, start, end, spans));
+    return { id: `c${chunkIndex + 1}${unit.id}`, start, end, text: script.slice(start, end),
+      dialogueCharacters, minimumSpeechSeconds: Math.ceil(dialogueCharacters / 4) };
+  }));
+}
+function durationPlanContext(script: string, info: DirectorUnderstanding) {
+  return { sourceScript: script, sourceRows: buildDirectorPlanningRows(script, info.characters.map(item => item.name)) };
+}
 export function validateDirectorProject(value: unknown): DirectorProject {
   const data = record(value, '导演项目');
   if (data.version !== 1) invalid('导演项目版本不受支持。');
@@ -569,8 +589,9 @@ export function validateDirectorProject(value: unknown): DirectorProject {
   const shots = array(data.shots, '分镜').map((item, index) => validateShot(item, index, sourceScript, info, chunks, context, true));
   if (!shots.length) invalid('导演项目没有分镜。');
   validateCoverage(shots, sourceScript, sourceScript.length);
+  const plan = data.plan === undefined ? undefined : validateDirectorDurationPlan(data.plan, durationPlanContext(sourceScript, info));
   const production = validateDirectorProduction(data.production, shots, info);
-  return { version: 1, sourceScript, settings, understanding: info, shots, ...(production ? { production } : {}) };
+  return { version: 1, sourceScript, settings, understanding: info, shots, ...(plan ? { plan } : {}), ...(production ? { production } : {}) };
 }
 export function validateDirectorCheckpoint(value: unknown): DirectorCheckpoint {
   const data = record(value, '恢复记录');
@@ -605,8 +626,10 @@ export function validateDirectorCheckpoint(value: unknown): DirectorCheckpoint {
   if (storedCompletedIds.length && coveredEnd !== sourceScript.length) invalid('恢复记录在全剧分镜完成前生成提示词。');
   const completedPromptShotIds = storedCompletedIds.filter(id => shots.some(shot => shot.id === id && shot.masterPrompt));
   if (data.production !== undefined && !info) invalid('恢复记录的制作资料缺少已确认的全局资产。');
+  if (data.plan !== undefined && !info) invalid('恢复记录的全剧时长规划缺少已完成的全局理解。');
+  const plan = data.plan === undefined ? undefined : validateDirectorDurationPlan(data.plan, durationPlanContext(sourceScript, info!));
   const production = info ? validateDirectorProduction(data.production, shots, info) : undefined;
-  return { version: 1, sourceScript, settings, chunks, analyses, ...(info ? { understanding: info } : {}), shots, completedPromptShotIds, ...(production ? { production } : {}) };
+  return { version: 1, sourceScript, settings, chunks, analyses, ...(info ? { understanding: info } : {}), shots, completedPromptShotIds, ...(plan ? { plan } : {}), ...(production ? { production } : {}) };
 }
 
 function abort(signal?: AbortSignal): void {
@@ -669,6 +692,9 @@ function pendingStoryboardUnits(chunk: DirectorChunk, sourceStart: number) {
     ...unit, start: Math.max(unit.start, cursor), text: chunk.text.slice(Math.max(unit.start, cursor), unit.end),
   }));
 }
+function planForRange(plan: DirectorDurationPlan | undefined, start: number, end: number) {
+  return plan?.segments.filter(segment => segment.sourceStart < end && segment.sourceEnd > start).map(({ sourceExcerpt: _excerpt, ...segment }) => segment) || [];
+}
 function storyboardPrompt(state: DirectorCheckpoint, chunk: DirectorChunk): string {
   const info = state.understanding!;
   const spans = dialogueSpans(state.sourceScript, info.characters.map(item => item.name));
@@ -682,7 +708,7 @@ function storyboardPrompt(state: DirectorCheckpoint, chunk: DirectorChunk): stri
   const craftSchema = enhanced ? ',"craft":{"emotionStart":"原文支持的起始可见情绪","emotionalTrigger":"本镜原文触发事件","emotionEnd":"结尾可见变化","spatialAnchor":"已有空间与人物落点","cameraPurpose":"观众在本镜需要发现什么","lightSoundCue":"沿原文与用户设置的光声线索"}' : '';
   const boundarySchema = ',"boundary":{"start":[],"end":[]}';
   const craftRequirement = enhanced ? '\n每镜必须返回craft的全部六个文字字段；不适用项可以为空字符串，不凑满、不凭空添加情绪转折或主观视觉变化。它记录导演意图，不能成为新增剧情、对白或素材上传状态的依据。' : '';
-  return `任务：把当前来源块完整变成分镜 [DIRECTOR_STORYBOARD]\n${authority}\n${STORYBOARD_GUIDANCE}\n${buildDirectorMethodGuidance(state.settings.creativeMethod, 'storyboard')}\n${capabilities}\n用户设置：${JSON.stringify(state.settings)}\n全局资产与剧情：${JSON.stringify(info)}\n当前块分析：${JSON.stringify(state.analyses.find(item => item.chunkId === chunk.id))}\n前镜交接（只承接，不重复演出）：${JSON.stringify(state.shots.at(-1) ? shotContext(state.shots.at(-1)!) : null)}\n下一来源块的事件（只预留落点，不提前拍）：${JSON.stringify(state.analyses[Number(chunk.id.split('-')[1])]?.beats || [])}\n当前块原文范围[${start},${chunk.end})（只编排尚未完成的原文；前镜已经保存，不要重复）：\n<source-script>\n${chunk.text.slice(start - chunk.start)}\n</source-script>\n本块原文编号表（只返回编号范围，程序自行保存原文，不重抄）：\n${sourceTable}\n本块权威对白（从原文直接提取；不可改写或删词）：\n${canonicalDialogue(state.sourceScript, start, chunk.end, spans) || '没有明确对白，不增加。'}\n按剧情需要决定镜数，不固定镜数。每镜用sourceStartUnit和sourceEndUnit选择连续原文编号范围，结束编号包含在本镜内。第一镜从${sourceUnits[0].id}开始，下一镜从上一镜结束编号的下一个编号开始，最后一镜必须到${sourceUnits.at(-1)!.id}，不能遗漏、重复或倒序。编号是原文定位，不是镜数；可合并多个相邻编号成一个镜头。不要输出sourceExcerpt，不重抄或概括原文。程序从编号范围提取原文和对白。合并后的对白字数相加，每镜最多116字，时长至少为ceil(对白字数/4)+1秒；超过则拆为相邻镜头，不要强行合并。可以把过长对白原句在自然停顿处分给相邻镜，绝不省字；按每秒3—4字另留至少1秒停顿/动作。每镜4到30秒整数。scene与charactersInvolved使用全局资产原名。程序从原文位置提取权威对白，JSON无需另输出dialogue，不要重复抄写对白增加输出负担。${craftRequirement}\n可选boundary用于起止状态，start/end可为空；每项为{"subject":"本镜主体原名或具体物件","field":"position/facing/leftHand/rightHand/objectState/movement/lighting/unfinishedAction之一","value":"可观察状态","provenance":"source或design","sourceExcerpt":"本镜原文短连续逐字依据"}。原文事实用source且逐字摘录依据；原文未给出的必要视觉安排用design，sourceExcerpt可空；未知不填，不把推断当事实。AI绝不能输出confirmed（只有用户能人工确认），不必为了填表增加动作。\n返回：{"shots":[{"scene":"资产场景名","charactersInvolved":["资产角色名"],"sourceStartUnit":"${sourceUnits[0].id}","sourceEndUnit":"${sourceUnits[0].id}","action":"主体、目标、动作过程与结果","camera":"一个主要观察意图与可见路径","durationSeconds":12,"continuity":"起点状态→结束状态"${craftSchema}${boundarySchema}}]}`;
+  return `任务：把当前来源块完整变成分镜 [DIRECTOR_STORYBOARD]\n${authority}\n${STORYBOARD_GUIDANCE}\n${buildDirectorMethodGuidance(state.settings.creativeMethod, 'storyboard')}\n${capabilities}\n用户设置：${JSON.stringify(state.settings)}\n全局资产与剧情：${JSON.stringify(info)}\n全剧前置时长规划中与本次原文相交的片段：${JSON.stringify(planForRange(state.plan, start, chunk.end))}\n规划段以30秒为目标，内部可包含多个电影镜头；按各段剧情任务与时长预算拆内部镜头，尽量在规划来源边界落镜，不把每个内部镜头都填成30秒。阅读块边界不等于新的视频片段，不重复动作或留白来拉长总时间。\n当前块分析：${JSON.stringify(state.analyses.find(item => item.chunkId === chunk.id))}\n前镜交接（只承接，不重复演出）：${JSON.stringify(state.shots.at(-1) ? shotContext(state.shots.at(-1)!) : null)}\n下一来源块的事件（只预留落点，不提前拍）：${JSON.stringify(state.analyses[Number(chunk.id.split('-')[1])]?.beats || [])}\n当前块原文范围[${start},${chunk.end})（只编排尚未完成的原文；前镜已经保存，不要重复）：\n<source-script>\n${chunk.text.slice(start - chunk.start)}\n</source-script>\n本块原文编号表（只返回编号范围，程序自行保存原文，不重抄）：\n${sourceTable}\n本块权威对白（从原文直接提取；不可改写或删词）：\n${canonicalDialogue(state.sourceScript, start, chunk.end, spans) || '没有明确对白，不增加。'}\n按剧情需要决定镜数，不固定镜数。每镜用sourceStartUnit和sourceEndUnit选择连续原文编号范围，结束编号包含在本镜内。第一镜从${sourceUnits[0].id}开始，下一镜从上一镜结束编号的下一个编号开始，最后一镜必须到${sourceUnits.at(-1)!.id}，不能遗漏、重复或倒序。编号是原文定位，不是镜数；可合并多个相邻编号成一个镜头。不要输出sourceExcerpt，不重抄或概括原文。程序从编号范围提取原文和对白。合并后的对白字数相加，每镜最多116字，时长至少为ceil(对白字数/4)+1秒；超过则拆为相邻镜头，不要强行合并。可以把过长对白原句在自然停顿处分给相邻镜，绝不省字；按每秒3—4字另留至少1秒停顿/动作。每镜4到30秒整数。scene与charactersInvolved使用全局资产原名。程序从原文位置提取权威对白，JSON无需另输出dialogue，不要重复抄写对白增加输出负担。${craftRequirement}\n可选boundary用于起止状态，start/end可为空；每项为{"subject":"本镜主体原名或具体物件","field":"position/facing/leftHand/rightHand/objectState/movement/lighting/unfinishedAction之一","value":"可观察状态","provenance":"source或design","sourceExcerpt":"本镜原文短连续逐字依据"}。原文事实用source且逐字摘录依据；原文未给出的必要视觉安排用design，sourceExcerpt可空；未知不填，不把推断当事实。AI绝不能输出confirmed（只有用户能人工确认），不必为了填表增加动作。\n返回：{"shots":[{"scene":"资产场景名","charactersInvolved":["资产角色名"],"sourceStartUnit":"${sourceUnits[0].id}","sourceEndUnit":"${sourceUnits[0].id}","action":"主体、目标、动作过程与结果","camera":"一个主要观察意图与可见路径","durationSeconds":12,"continuity":"起点状态→结束状态"${craftSchema}${boundarySchema}}]}`;
 }
 function shotContext(shot: DirectorShot) {
   return { id: shot.id, shotNumber: shot.shotNumber, scene: shot.scene, charactersInvolved: shot.charactersInvolved,
@@ -775,7 +801,7 @@ function promptBatch(project: DirectorProject, shots: DirectorShot[]): string {
   const directions = shots.map(shot => {
     const index = project.shots.findIndex(item => item.id === shot.id);
     const craftContext = { current: shot.craft || null, previous: project.shots[index - 1]?.craft || null, next: project.shots[index + 1]?.craft || null };
-    return `镜头ID：${shot.id}\n导演工艺上下文（只用于原剧情的表演、空间、摄影与光声选择，不是新剧情来源）：${JSON.stringify(craftContext)}\n制作资料上下文（素材职责、地点光色与本镜状态；引用序号由软件按人工确认另行渲染）：${buildDirectorProductionContext(project, shot)}\n相邻结构化交接（写法不同仅需核对，不自动视为冲突；不能新增剧情）：${JSON.stringify({ previous: project.shots[index - 1]?.boundary || null, next: project.shots[index + 1]?.boundary || null })}\n${buildVideoPrompt(shot, {
+    return `镜头ID：${shot.id}\n所属全剧片段规划（本镜只是其中一部分，使用本镜时长，勿扩写成整段或提前演出）：${JSON.stringify(planForRange(project.plan, shot.sourceStart, shot.sourceEnd))}\n导演工艺上下文（只用于原剧情的表演、空间、摄影与光声选择，不是新剧情来源）：${JSON.stringify(craftContext)}\n制作资料上下文（素材职责、地点光色与本镜状态；引用序号由软件按人工确认另行渲染）：${buildDirectorProductionContext(project, shot)}\n相邻结构化交接（写法不同仅需核对，不自动视为冲突；不能新增剧情）：${JSON.stringify({ previous: project.shots[index - 1]?.boundary || null, next: project.shots[index + 1]?.boundary || null })}\n${buildVideoPrompt(shot, {
       style: project.settings.visualStyle, aspectRatio: project.settings.aspectRatio, duration: `${shot.durationSeconds}秒`,
       lighting: project.settings.lighting, sound: project.settings.sound, vfx: '只采用源剧本所述效果，不新增剧情特效',
       reference: '待准备素材，用资产名称描述职责，不预设图片或音频已上传',
@@ -805,8 +831,8 @@ function parsePromptBatch(data: Record<string, unknown>, shots: DirectorShot[], 
   });
 }
 
-/** Serial AI pipeline. Successful units are committed only after full validation. */
-export async function runAutoDirector(options: RunAutoDirectorOptions): Promise<DirectorProject> {
+/** Read every source chunk before estimating the complete story. */
+async function prepareAutoDirector(options: RunAutoDirectorOptions) {
   const script = validateScript(options.script);
   const settings = validateDirectorSettings(options.settings);
   abort(options.signal);
@@ -839,6 +865,31 @@ export async function runAutoDirector(options: RunAutoDirectorOptions): Promise<
     state.understanding = await request(options.generate, understandingPrompt(state), data => understanding(data, script), options.signal);
     checkpoint();
   }
+  // Existing shots predate planning and retain their original layout on resume.
+  if (!state.plan && !state.shots.length) {
+    progress('planning', 0, 1, '先估算全剧时长、30秒制作片段数量及逐段剧情任务');
+    const context = durationPlanContext(script, state.understanding!);
+    const prompt = `任务：全剧时长与片段规划 [DIRECTOR_PLAN]\n${authority}\n${buildDirectorMethodGuidance(settings.creativeMethod, 'understanding')}\n` + buildDirectorPlanPrompt({
+      ...context, storyContext: { understanding: state.understanding, settings },
+    });
+    state.plan = await request(options.generate, prompt, data => parseDirectorDurationPlan(data, context), options.signal);
+    checkpoint();
+    progress('planning', 1, 1, `全剧预计${state.plan.estimatedMinSeconds}–${state.plan.estimatedMaxSeconds}秒，建议${state.plan.segments.length}个制作片段（每段目标30秒）`);
+  }
+  return { script, settings, state, checkpoint, progress };
+}
+
+/** Save a reviewable estimate without generating storyboards or video prompts. */
+export async function estimateAutoDirector(options: RunAutoDirectorOptions): Promise<DirectorCheckpoint> {
+  const { state } = await prepareAutoDirector(options);
+  abort(options.signal);
+  if (!state.plan) invalid('旧草案已有分镜且没有前置规划，请保留原草案并开始新一轮估算；不能把原分镜标成已完成估算。');
+  return clone(state);
+}
+
+/** Serial AI pipeline. Successful units are committed only after full validation. */
+export async function runAutoDirector(options: RunAutoDirectorOptions): Promise<DirectorProject> {
+  const { script, settings, state, checkpoint, progress } = await prepareAutoDirector(options);
   const completedStoryboardEnd = state.shots.at(-1)?.sourceEnd || 0;
   const firstUnfinishedChunk = state.chunks.findIndex(chunk => chunk.start <= completedStoryboardEnd && completedStoryboardEnd < chunk.end);
   if (firstUnfinishedChunk >= 0) {
@@ -865,7 +916,7 @@ export async function runAutoDirector(options: RunAutoDirectorOptions): Promise<
   let remaining = state.shots.filter(shot => !state.completedPromptShotIds.includes(shot.id));
   while (remaining.length) {
     let batch = remaining.slice(0, PROMPT_BATCH_SIZE);
-    const promptProject: DirectorProject = { version: 1, sourceScript: script, settings, understanding: state.understanding!, shots: state.shots, ...(state.production ? { production: state.production } : {}) };
+    const promptProject: DirectorProject = { version: 1, sourceScript: script, settings, understanding: state.understanding!, shots: state.shots, ...(state.plan ? { plan: state.plan } : {}), ...(state.production ? { production: state.production } : {}) };
     let prompt = promptBatch(promptProject, batch);
     while (prompt.length > NORMAL_REQUEST_BUDGET && batch.length > 1) {
       batch = batch.slice(0, -1);
@@ -882,7 +933,7 @@ export async function runAutoDirector(options: RunAutoDirectorOptions): Promise<
     checkpoint();
     remaining = state.shots.filter(shot => !state.completedPromptShotIds.includes(shot.id));
   }
-  const project = validateDirectorProject({ version: 1, sourceScript: script, settings, understanding: state.understanding, shots: state.shots, ...(state.production ? { production: state.production } : {}) });
+  const project = validateDirectorProject({ version: 1, sourceScript: script, settings, understanding: state.understanding, shots: state.shots, ...(state.plan ? { plan: state.plan } : {}), ...(state.production ? { production: state.production } : {}) });
   progress('complete', project.shots.length, project.shots.length, `已完成${project.shots.length}个片段的提示词；尚未生成视频`);
   abort(options.signal);
   return project;
@@ -913,7 +964,12 @@ export function exportDirectorMarkdown(project: DirectorProject): string {
   const total = validated.shots.reduce((sum, shot) => sum + shot.durationSeconds, 0);
   const safeFence = (text: string) => { const width = Math.max(3, ...[...text.matchAll(/`+/g)].map(match => match[0].length + 1)); return `${'`'.repeat(width)}text\n${text}\n${'`'.repeat(width)}`; };
   return [`# 漫剧自动导演创作包`,
-    `平台：${validated.settings.platform === 'jimeng' ? '即梦国内' : '小云雀国内'} · Seedance 2.5\n创作方法：${getDirectorMethod(validated.settings.creativeMethod).title}\n画幅：${validated.settings.aspectRatio} · ${validated.shots.length}个片段 · 计划总长${total}秒\n只生成提示词文字；时长与画幅需在平台设置。实际视频、上传与延长尚未执行。`,
+    `平台：${validated.settings.platform === 'jimeng' ? '即梦国内' : '小云雀国内'} · Seedance 2.5\n创作方法：${getDirectorMethod(validated.settings.creativeMethod).title}\n画幅：${validated.settings.aspectRatio} · ${validated.shots.length}个片段 · 当前编排时长${total}秒\n只生成提示词文字；时长与画幅需在平台设置。实际视频、上传与延长尚未执行。`,
+    ...(validated.plan ? [
+      `## 前置全剧时长规划\n预计全剧${validated.plan.estimatedMinSeconds}–${validated.plan.estimatedMaxSeconds}秒；建议${validated.plan.segments.length}个制作片段，每段以30秒为目标，尾段或自然边界允许更短。按总秒数折算约${validated.plan.estimatedSegmentCount.min}–${validated.plan.estimatedSegmentCount.max}个完整30秒段，等量参考不等于实际计划段数。\n估算依据剧情、对白、动作和停顿；内部电影镜头另行拆分，每镜提示词按本镜时长使用。`,
+      `### 分镜后时长复核\n当前编排${total}秒；${total >= validated.plan.estimatedMinSeconds && total <= validated.plan.estimatedMaxSeconds ? '总时长在前置估算范围内。' : '总时长超出前置估算范围，请按逐段任务复核节奏与镜头数量。'}\n${reconcileDirectorPlanTiming(validated.plan, validated.shots).segments.map(segment => `- 第${segment.number}规划段：${segment.actualSeconds === null ? '存在跨规划边界镜头，不能按原文字数分摊时长。' : `${segment.actualSeconds}秒${segment.withinEstimate ? '，在估算范围内。' : '，超出该段估算范围，需复核。'}`}`).join('\n')}`,
+      ...validated.plan.segments.map(segment => `### 第${segment.number}规划段 · ${segment.durationMinSeconds}–${segment.durationMaxSeconds}秒\n剧情任务：${segment.storyPurpose}\n对白演绎估计：${segment.dialogueSeconds}秒\n动作与停顿：${segment.actionNotes}\n承接：${segment.transitionNotes}\n原文范围：[${segment.sourceStart},${segment.sourceEnd})`),
+    ] : ['## 前置全剧时长规划\n旧项目没有前置估算，以上当前编排时长由已保存分镜相加所得。']),
     `## 全剧理解\n${info.summary}\n\n${info.storyArc}`,
     `## 资产设定\n${[...info.characters.map(item => `- 角色 ${item.name}：${item.description}\n  原文依据：${item.sourceExcerpt}`), ...info.scenes.map(item => `- 场景 ${item.name}：${item.description}\n  原文依据：${item.sourceExcerpt}`)].join('\n')}`,
     `## 连续性规则\n${info.continuityRules.map(line => `- ${line}`).join('\n') || '原文未提供额外规则。'}`,
