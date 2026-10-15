@@ -501,7 +501,7 @@ test('storyboard omissions and overloaded dialogue are rejected rather than repl
       sourceExcerpt: '室内，傍晚。', action: '停住', camera: '中景', durationSeconds: 12, continuity: '门前停住' }] });
     return ai.generate(prompt, json, signal);
   };
-  await assert.rejects(runAutoDirector({ script, settings, generate: omitted }), /尾部原文/);
+  await assert.rejects(runAutoDirector({ script, settings, generate: omitted }), /尾部原文|遗漏、改写或重复/);
   const tooLong = `室内。\n李明：“${'请逐字保留'.repeat(40)}”`;
   await assert.rejects(runAutoDirector({ script: tooLong, settings, generate: fakeAI().generate }), /对白.*过密/);
 });
@@ -716,7 +716,7 @@ function indexedStoryboardAI(change?: (shots: Record<string, unknown>[], prompt:
     calls.push(prompt);
     if (!prompt.includes('[DIRECTOR_STORYBOARD]')) return ai.generate(prompt, json, signal);
     const source = prompt.match(/<source-script>\n([\s\S]*?)\n<\/source-script>/)![1];
-    const units = buildDirectorSourceUnits({ id: 'chunk-1', start: 0, end: source.length, text: source });
+    const units = prompt.split('\n').filter(line => line.startsWith('{\"id\":\"u')).map(line => JSON.parse(line));
     const shots: Record<string, unknown>[] = units.map(unit => ({
       scene: '室内', charactersInvolved: source.includes('李明') ? ['李明'] : [],
       sourceStartUnit: unit.id, sourceEndUnit: unit.id,
@@ -765,7 +765,7 @@ test('indexed references work with the default research method and its required 
   assert.ok(result.shots.every(shot => shot.masterPrompt));
 });
 
-test('indexed storyboard rejects skipped, repeated, reversed, unknown and half-present ranges without committing shots', async () => {
+test('indexed storyboard rejects invalid ranges while retaining only validated continuous prefixes', async () => {
   const source = '室内。李明停住。门关上。';
   const changes = [
     (shots: Record<string, unknown>[]) => { shots.splice(1, 1); },
@@ -779,7 +779,9 @@ test('indexed storyboard rejects skipped, repeated, reversed, unknown and half-p
     const ai = indexedStoryboardAI(change);
     await assert.rejects(runAutoDirector({ script: source, settings, generate: ai.generate, onCheckpoint: value => { checkpoint = value; } }), /AI数据校验失败/);
     assert.equal(ai.calls.filter(call => call.includes('[DIRECTOR_STORYBOARD]')).length, 2);
-    assert.equal(checkpoint!.shots.length, 0);
+    assert.ok(checkpoint!.shots.length < buildDirectorSourceUnits(chunkDirectorScript(source)[0]).length);
+    assert.equal(checkpoint!.shots.map(shot => shot.sourceExcerpt).join(''), source.slice(0, checkpoint!.shots.at(-1)?.sourceEnd || 0));
+    assert.deepEqual(validateDirectorCheckpoint(JSON.parse(JSON.stringify(checkpoint))), checkpoint);
     assert.ok(checkpoint!.understanding);
   }
 });
@@ -790,7 +792,7 @@ test('indexed storyboard requires the final source unit and rejects a conflictin
     (shots: Record<string, unknown>[]) => { shots[0].sourceExcerpt = '室外，下雪。'; },
   ]) {
     const ai = indexedStoryboardAI(change);
-    await assert.rejects(runAutoDirector({ script, settings, generate: ai.generate }), /尾部原文|摘录与原文编号范围不一致/);
+    await assert.rejects(runAutoDirector({ script, settings, generate: ai.generate }), /尾部原文|没有分镜|摘录与原文编号范围不一致/);
   }
 });
 

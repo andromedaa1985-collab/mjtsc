@@ -584,7 +584,10 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
     setFocusRequest(previous => ({ id: shotId, token: (previous?.token || 0) + 1 }));
   };
 
-  const currentStep = progress?.stage === 'complete' ? steps.length : steps.findIndex(step => step.id === progress?.stage);
+  const coveredSourceEnd = checkpoint?.shots.at(-1)?.sourceEnd || 0;
+  const restoredStage = checkpoint ? coveredSourceEnd === checkpoint.sourceScript.length ? 'prompts'
+    : checkpoint.understanding ? 'storyboard' : checkpoint.analyses.length === checkpoint.chunks.length ? 'understanding' : 'analysis' : undefined;
+  const currentStep = progress?.stage === 'complete' ? steps.length : steps.findIndex(step => step.id === (progress?.stage || restoredStage));
   const exportProject = (format: 'json' | 'md') => {
     try {
       if (hasUnsavedChanges) throw new Error('请先保存或取消分镜、状态或制作资料修改，再导出项目。');
@@ -659,8 +662,8 @@ export default function AutoDirectorStudio(props: AutoDirectorStudioProps) {
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-current font-mono text-xs tabular-nums">{index < currentStep ? <Check className="size-3" aria-hidden="true" /> : index + 1}</span>{step.label}
               </li>)}
             </ol>}
-            <p role="status" aria-live="polite" className="mt-4 text-pretty text-sm leading-7 text-zinc-400">{pending?.kind === 'shot' ? '按这一镜的新内容重新编写，其他镜头保持原样。' : progress?.message || '已经完成的步骤会从这里继续。'}{pending?.kind === 'project' && progress && progress.total > 0 && <span className="ml-2 font-mono text-xs tabular-nums text-zinc-500">{progress.completed} / {progress.total}</span>}</p>
-            {checkpoint && !pending && <p className="mt-2 text-xs tabular-nums text-zinc-500">已保留 {checkpoint.shots.length} 镜，{checkpoint.completedPromptShotIds.length} 镜提示词。</p>}
+            <p role="status" aria-live="polite" className="mt-4 text-pretty text-sm leading-7 text-zinc-400">{pending?.kind === 'shot' ? '按这一镜的新内容重新编写，其他镜头保持原样。' : (!pending && checkpoint ? '制作尚未完成，已保存的进度会从这里继续。' : progress?.message) || '已经完成的步骤会从这里继续。'}{pending?.kind === 'project' && progress && progress.total > 0 && <span className="ml-2 font-mono text-xs tabular-nums text-zinc-500">{progress.completed} / {progress.total}</span>}</p>
+            {checkpoint && <p className="mt-2 text-xs tabular-nums leading-6 text-zinc-400">已保留 {checkpoint.shots.length} 镜，{checkpoint.completedPromptShotIds.length} 镜提示词。原文已覆盖 {coveredSourceEnd.toLocaleString()} / {checkpoint.sourceScript.length.toLocaleString()} 字。{coveredSourceEnd > 0 && coveredSourceEnd < checkpoint.sourceScript.length && '继续时只补做尚未覆盖的原文。'}</p>}
           </section>}
 
           {!displayProject ? <section className="pt-2" aria-label="创作流程介绍">
